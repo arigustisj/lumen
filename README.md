@@ -93,16 +93,50 @@ kredensial.
 | `-timeout` | 3m | batas waktu total |
 | `-quiet` | false | ringkas saja |
 
+## Pakai di Termux (Android)
+
+```bash
+make termux                        # -> dist/lumen-termux (aarch64, statis)
+scp dist/lumen-termux <user>@<ip>:~/bin/lumen
+
+# di HP
+termux-chmod 755 ~/bin/lumen
+~/bin/lumen -target https://app.example.com -width 46
+```
+
+Termux menjalankan binary Linux native, jadi binary amd64 dari WSL tidak bisa
+dipakai. `-width 46` itu untuk layar HP; tanpa itu baris akan terpotong tepat
+di bagian yang paling penting. Warna dan unicode otomatis menyesuaikan —
+`NO_COLOR=1` kalau mau polos.
+
 ## Struktur
 
+Satu package di root, supaya bisa di-import oleh project lain:
+
 ```
-cmd/lumen/          CLI: flag, wiring, output
-internal/scope/     guard host + rate limiter
-internal/extract/   parser HTML & JS — inti nilai alat ini
-internal/mapper/    orkestrasi crawl
-internal/probe/     verifikasi OPTIONS
-internal/report/    JSON + ringkasan terminal
-internal/model/     tipe data bersama
+go.mod            module github.com/0xlzy-sam/lumen
+scope.go          guard host + rate limiter
+extract.go        parser HTML & JS — inti nilai alat ini
+mapper.go         orkestrasi crawl
+probe.go          verifikasi OPTIONS
+owasp.go          taksonomi OWASP + classifier + coverage
+sarif.go          ekspor SARIF 2.1.0
+report.go         JSON + tampilan terminal
+tui.go            warna, box, wrap, deteksi lebar terminal
+model.go          tipe data + identitas tool
+cmd/lumen/        CLI tipis
+```
+
+Dipakai sebagai library:
+
+```go
+import "github.com/0xlzy-sam/lumen"
+
+m := lumen.NewMapper(lumen.MapperConfig{Target: u, Conc: 4})
+m.Run(ctx)
+pages, eps, findings, _ := m.Snapshot()
+cands := lumen.Classify(eps, findings)
+cov := lumen.BuildCoverage(lumen.Report{Stats: stats})
 ```
 
 ## Detail teknis yang layak diketahui
@@ -135,14 +169,76 @@ menyalin kredensial asli ke file dan ke terminal.
 ## Test
 
 ```
-internal/extract/  test_test.go   rute dari bundle, metode, kredensial, kanonikalisasi
-internal/scope/    test_scope.go  guard menolak host lain, termasuk prefix menipu
-internal/mapper/   test_mapper.go end-to-end dengan SPA palsu
+extract_test.go   rute dari bundle, metode, kredensial, kanonikalisasi
+scope_test.go     guard menolak host lain, termasuk prefix menipu
+mapper_test.go    end-to-end dengan SPA palsu
+owasp_test.go     klasifikasi BOLA/BFLA, kejujuran coverage, SARIF, exit code
 ```
 
 `make race` wajib jalan sebelum commit — mapper punya worker paralel dan pernah
 memang punya data race (cookie menempel ke halaman yang salah karena ditulis
 via `m.pages[len-1]`).
+
+## Deteksi: OWASP + SARIF
+
+Hasil `lumen` bukan cuma daftar path. Endpoint di-klasifikasi ke
+**OWASP API Security Top 10 (2023)** dan **OWASP Web Top 10 (2021)**, masing-masing
+dengan ID CWE supaya bisa di-search dan diproses tool lain.
+
+Klasifikasi berbasis sinyal statis — pola path, flag probe, header yang hilang.
+Lumen tidak pernah melakukan login, jadi **hasilnya kandidat, bukan temuan
+terbukti**. Setiap kandidat membawa:
+
+- `signal` — bukti statis yang memunculkannya
+- `verify` — langkah konkret untuk mengonfirmasi **atau menyangkal**
+- `remediate` — arah perbaikan
+
+Dua kelas yang paling fruitful di API modern, dan keduanya butuh dua akun
+untuk dibuktikan — itu sebabnya lumen tidak bisa menyelesaikannya sendiri:
+
+| Kategori | Kapan muncul |
+|---|---|
+| **API1:2023** BOLA | path dengan parameter objek, mis. `/api/orders/${id}` |
+| **API5:2023** BFLA | path `/admin` atau `/internal`, apalagi yang 2xx tanpa auth |
+
+Confidence naik hanya karena sinyal yang benar-benar diamati. Endpoint yang
+hanya terlihat sebagai string di bundle **tidak pernah** dapat confidence
+high — ada test yang menjaga itu (`TestClassifyTidakMengarangBukti`).
+
+### SARIF 2.1.0
+
+File `.sarif` bisa langsung masuk GitHub code scanning, GitLab, atau pipeline
+mana pun yang baca SARIF. Kalau output pakai skema sendiri, setiap adopter
+harus menulis parser dulu — dan pada praktiknya tidak ada yang mau.
+
+Kandidat ditulis level **`note`**, bukan `error`. Menaikkannya bikin code
+scanning beralam atas hal yang belum diperiksa, dan orang lalu mematikan
+alarmnya seluruhnya — lebih buruk daripada tidak ada output.
+
+### Exit code
+
+```
+0  tidak ada kandidat confidence tinggi
+2  ada kandidat high
+3  scan tidak bisa dipercaya — tidak ada bundle yang terbaca
+```
+
+Exit **3** itu sengaja. Tanpa itu, scan yang gagal membaca target terlihat
+IDENTIK dengan scan yang bersih, dan itu penyebab paling umum pipeline hijau
+palsu. Pakai `-exit-zero` untuk pemakaian manual.
+
+### Coverage
+
+Laporan selalu menyatakan apa yang **tidak** diuji. Tanpa itu, "tidak ada
+temuan" hanya berarti "tidak ada yang kita lihat" — bukan "aman".
+
+```
+* dianalisis   header keamanan HTTP per halaman
+* TIDAK diuji  logika otorisasi server — BOLA/BFLA butuh dua akun berbeda
+* batas        hanya GET dan OPTIONS; tidak ada request yang mengubah state
+```
+
+Di Termux/HP menuju production orang lain, `-delay 1s -conc 2`.
 
 ## Batasan yang diketahui
 
