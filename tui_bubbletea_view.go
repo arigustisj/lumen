@@ -326,26 +326,118 @@ func (m *TUIModel) viewRootError() string {
 
 // diagnose mengubah pesan error jaringan menjadi langkah yang bisa dicoba.
 //
-// Ini bukan tebakan: setiap-butir memetakan pesan error yang memang
-// uversibly dihasilkan oleh net/http ke penyebab yang paling sering.
+// Setiap-butir memetakan pesan yang memang dihasilkan net/http ke penyebab
+// yang paling sering. Diagnosa paling penting adalah yang paling sering
+// disalahdamar: DNS yang mengembalikan alamat loopback bukan berarti server
+// mati, dan mengira begitu membuat orang mengejar masalah yang salah.
 func diagnose(msg string) []string {
 	m := strings.ToLower(msg)
 	var out []string
+
+	// Kasus "DNS diblokir": Android dan beberapa VPN mengembalikan 127.0.0.1
+	// atau ::1 untuk domain yang diblokir, lalu koneksinya ditolak. Pesannya
+	// terlihat seperti "server menolak koneksi", padahal tidak ada yang pernah
+	// sampai ke server.
+	if ip := addrInError(msg); isLoopback(ip) {
+		return []string{
+			"DNS mengembalikan " + ip + " (loopback) — domain ini diblokir di sisi perangkat, bukan server mati",
+			"cek Android: Settings → Network → Private DNS → dimatikan atausetel Automatic",
+			"cek juga daftar blokir DNS, adblock, atau VPN yang aktif",
+			"scan dari jaringan lain untuk memastikan: kalau di sana berhasil, masalahnya perangkat ini",
+		}
+	}
+
 	switch {
 	case strings.Contains(m, "no such host"), strings.Contains(m, "dns"):
 		out = append(out, "DNS tidak resolve — cek nama domain dan koneksi internet")
-	case strings.Contains(m, "i/o timeout"), strings.Contains(m, "timeout"), strings.Contains(m, "context deadline"):
+	case strings.Contains(m, "i/o timeout"), strings.Contains(m, "timeout"),
+		strings.Contains(m, "context deadline"):
 		out = append(out, "timeout — naikkan dengan -timeout 5m, atau kurangi beban jaringan")
-		out = append(out, "kalau di HP, ganti jaringan: Wi-Fi captive portal memblokir")
+		out = append(out, "kalau di HP, ganti jaringan: Wi-Fi captive portal sering memblokir")
 	case strings.Contains(m, "connection refused"):
-		out = append(out, "koneksi ditolak — port tertutup atau server belum jalan")
+		out = append(out, "koneksi ditolak di alamat tujuan — cek apakah server hidup dan port terbuka")
 	case strings.Contains(m, "certificate"), strings.Contains(m, "x509"), strings.Contains(m, "tls"):
-		out = append(out, "sertifikat TLS bermasalah — cek tanggal dan hostname")
+		out = append(out, "sertifikat TLS bermasalah — cek tanggal berlaku dan kecocokan hostname")
 	case strings.Contains(m, "network is unreachable"), strings.Contains(m, "unreachable"):
+		out = append(out, "tidak ada rute ke host — cek VPN dan jaringan")
+	case strings.Contains(m, "no route to host"):
 		out = append(out, "tidak ada rute ke host — cek VPN dan jaringan")
 	}
 	out = append(out, "bisa juga salah ketik URL, atau target memang butuh autentikasi")
 	return out
+}
+
+// addrInError mengambil alamat IP yang disebut di pesan error.
+//
+// Format yang keluaran Go:
+//
+//	dial tcp 1.2.3.4:443: connect: connection refused
+//	dial tcp: lookup host on [::1]:42773: read: connection refused
+//
+// Bentuk keduanya harus ditangani; hanya yang kedua yang muncul di Android.
+func addrInError(msg string) string {
+	// Bentuk "[::1]:42773" atau "[1.2.3.4]:443"
+	if i := strings.Index(msg, " on ["); i >= 0 {
+		rest := msg[i+len(" on ["):]
+		if j := strings.IndexByte(rest, ']'); j > 0 {
+			return rest[:j]
+		}
+	}
+	// Bentuk "dial tcp 1.2.3.4:443" — IPv4 tanpa kurung siku.
+	if i := strings.Index(msg, "dial tcp "); i >= 0 {
+		rest := msg[i+len("dial tcp "):]
+		end := strings.IndexAny(rest, ": ")
+		if end > 0 {
+			cand := rest[:end]
+			if isIPv4(cand) {
+				return cand
+			}
+		}
+	}
+	// Bentuk "dial tcp [::1]:443" — IPv6 selalu ditulis dengan kurung siku.
+	if i := strings.Index(msg, "["); i >= 0 {
+		rest := msg[i+1:]
+		if j := strings.IndexByte(rest, ']'); j > 0 {
+			if cand := rest[:j]; strings.Contains(cand, ":") || isIPv4(cand) {
+				return cand
+			}
+		}
+	}
+	return ""
+}
+
+func isIPv4(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLoopback mengenali alamat yang mengarah ke perangkat sendiri.
+func isLoopback(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	if ip == "::1" || ip == "0:0:0:0:0:0:0:1" {
+		return true
+	}
+	// 127.0.0.0/8
+	if strings.HasPrefix(ip, "127.") {
+		return true
+	}
+	// "localhost" kadang muncul langsung di pesan error
+	return strings.EqualFold(ip, "localhost")
 }
 
 func (m *TUIModel) viewScanning() string {

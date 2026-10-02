@@ -422,3 +422,55 @@ func TestDiagnoseMenyetapoiPenVsGejala(t *testing.T) {
 		}
 	}
 }
+
+// TestDiagnoseDNSLoopback — pesan asli dari Termux di Android. DNS
+// mengembalikan ::1 karena domain diblokir di perangkat. Kelihatannya seperti
+// "connection refused", padahal tidak ada yang pernah sampai ke server.
+func TestDiagnoseDNSLoopback(t *testing.T) {
+	realistic := `Get "https://parama-stag.coba-sam.com/": dial tcp: lookup parama-stag.coba-sam.com on [::1]:42773: read: connection refused`
+	out := strings.Join(diagnose(realistic), " | ")
+
+	if !strings.Contains(out, "loopback") {
+		t.Errorf("harus menyebut loopback, dapat: %s", out)
+	}
+	if !strings.Contains(out, "::1") {
+		t.Errorf("harus menyebut alamat yang terdeteksi, dapat: %s", out)
+	}
+	if !strings.Contains(out, "Private DNS") {
+		t.Errorf("harus memberi langkah konkret, dapat: %s", out)
+	}
+	// Menyarankan "server belum jalan" di sini akan menyesatkan.
+	if strings.Contains(out, "server belum jalan") || strings.Contains(out, "port tertutup") {
+		t.Errorf("diagnosis salah: server-nya hidup, hanya DNS di perangkat yang memblokir. %s", out)
+	}
+}
+
+// TestDiagnoseLoopbackVarianBentuk — bentuk pesan Go berbeda beda tergantung
+// OS dan versi. Semua harus dikenali.
+func TestDiagnoseLoopbackVarianBentuk(t *testing.T) {
+	variants := []string{
+		`dial tcp: lookup x.test on [127.0.0.1]:53: read: connection refused`,
+		`dial tcp: lookup x.test on [::1]:42773: read: connection refused`,
+		`dial tcp 127.0.0.1:443: connect: connection refused`,
+		`dial tcp [::1]:443: connect: connection refused`,
+	}
+	for _, v := range variants {
+		out := strings.Join(diagnose(v), " | ")
+		if !strings.Contains(out, "loopback") {
+			t.Errorf("tidak dikenali sebagai loopback: %q\n  %s", v, out)
+		}
+	}
+}
+
+// TestDiagnoseIPAsingBukanLoopback — alamat publik yang menolak koneksi
+// memang masalah server, dan harus tetap di diagnose begitu.
+func TestDiagnoseIPAsingBukanLoopback(t *testing.T) {
+	msg := `dial tcp 104.21.48.183:443: connect: connection refused`
+	out := strings.Join(diagnose(msg), " | ")
+	if strings.Contains(out, "loopback") {
+		t.Errorf("IP publik salah dikira loopback: %s", out)
+	}
+	if !strings.Contains(out, "koneksi ditolak") {
+		t.Errorf("harus tetap menyebut koneksi ditolak, dapat: %s", out)
+	}
+}
