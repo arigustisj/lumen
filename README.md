@@ -359,7 +359,7 @@ tuntas, atau menjangkau lebih sedikit halaman, endpoint itu masih ada di
 server — cuma tidak terlihat di scan. Laporan yang salah baca ini jauh lebih
 berbahaya daripada tidak melaporkan apa-apa.
 
-Jadi kalau cakupannya tidak sebanding, lumen:]menyatakan itu eksplisit dan
+Jadi kalau cakupannya tidak sebanding, lumen menyatakan itu eksplisit dan
 mengubah labelnya:
 
 | kondisi | label |
