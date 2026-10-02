@@ -109,6 +109,12 @@ func NewTUIModel(target string) *TUIModel {
 	}
 }
 
+// SkipIntro mematikan layar pembuka untuk laporan yang dimuat dari disk.
+//
+// Report yang sudah pernah dilihat tidak butuh perkenalan lagi; memunculkan
+// judul besar di atas laporan lama hanya menambah satu keystroke sebelum isi.
+func (m *TUIModel) SkipIntro() { m.intro = false }
+
 // SetRunner memasang fungsi yang dipakai untuk menjalankan pemetaan ulang.
 func (m *TUIModel) SetRunner(f func() (*Report, []AuthzReport, error)) { m.Runner = f }
 

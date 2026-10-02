@@ -13,7 +13,7 @@ const (
 	Name    = "lumen"
 	Tagline = "pemeta permukaan aplikasi web"
 	Author  = "0xlzy"
-	Version = "0.3.3"
+	Version = "0.4.0"
 )
 
 // Banner mengembalikan satu baris identitas, mis. "lumen 0.3.1 — pemeta
@@ -35,7 +35,16 @@ const (
 // Finding adalah satu hal yang layak dilihat manusia. Tool ini tidak
 // menyimpulkan kerentanan — dia hanya menunjuk sesuatu yang menarik.
 // Penilaian tetap di tangan orang.
+// Finding adalah satu temuan.
+//
+// Title dan Detail dipisah karena tujuannya berbeda: Title jadi baris pertama
+// daftar dan judul bagian di laporan, jadi harus pendek dan bisa dibaca sekilas.
+// Detail adalah penjelasannya dan boleh panjang.
+//
+// Memaksakan judul dari baris pertama Detail menghasilkan judul sepanjang satu
+// paragraf, yang justru menutupi informasi lain di daftar.
 type Finding struct {
+	Title    string   `json:"title,omitempty"`
 	Kind     string   `json:"kind"`
 	Severity Severity `json:"severity"`
 	Where    string   `json:"where"`

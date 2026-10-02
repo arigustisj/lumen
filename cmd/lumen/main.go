@@ -18,19 +18,17 @@
 package main
 
 import (
-	lumen "github.com/arigustisj/lumen"
-
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/arigustisj/lumen"
 )
 
 // Nilai bawaan flag, dipakai untuk membedakan "user tidak menetapkannya"
@@ -43,283 +41,169 @@ const (
 )
 
 func main() {
-	log.SetFlags(0)
-
 	var (
-		target      = flag.String("target", "", "URL target, contoh https://staging.example.com")
-		outDir      = flag.String("out", "out", "direktori output")
-		stem        = flag.String("name", "", "nama file output tanpa ekstensi (default: dari host target)")
+		target      = flag.String("target", "", "URL target (lewati beranda dan langsung pindai)")
+		name        = flag.String("name", "", "nama target di laporan")
+		outDir      = flag.String("out", "out", "folder output")
 		conc        = flag.Int("conc", defaultConc, "request paralel")
 		delay       = flag.Duration("delay", defaultDelay, "jeda minimal antar request")
-		doProbe     = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS (OPTIONS saja)")
-		timeout     = flag.Duration("timeout", defaultTimeout, "batas waktu total")
-		quiet       = flag.Bool("quiet", false, "hanya cetak ringkasan singkat")
+		timeout     = flag.Duration("timeout", defaultTimeout, "batas waktu per scan")
+		noProbe     = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS dengan OPTIONS")
+		sarif       = flag.Bool("sarif", true, "tulis SARIF 2.1.0 untuk GitHub code scanning")
+		markdown    = flag.Bool("markdown", true, "tulis laporan .md untuk agent AI")
+		quiet       = flag.Bool("quiet", false, "tanpa ringkasan di layar")
+		versionFlag = flag.Bool("version", false, "tampilkan versi lalu keluar")
 		noCol       = flag.Bool("no-color", false, "matikan warna (default: autodeteksi terminal)")
-		ascii       = flag.Bool("ascii", false, "pakai karakter ASCII, bukan unicode")
-		width       = flag.Int("width", 0, "lebar output kolom; 0 = autodeteksi (berguna di Termux)")
-		showVer     = flag.Bool("version", false, "tampilkan versi lalu keluar")
-		sarif       = flag.Bool("sarif", true, "tulis findings.sarif (SARIF 2.1.0) untuk CI/code scanning")
-		exitZero    = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
+		asciiOnly   = flag.Bool("ascii", false, "karakter ASCII, bukan unicode")
+		width       = flag.Int("width", 0, "lebar kolom; 0 = autodeteksi. Berguna di Termux")
 		compact     = flag.Bool("compact", false, "ringkas: batas daftar per kategori")
-		cfgPath     = flag.String("config", "", "file konfigurasi YAML (multi-target, token authz)")
-		runAuthz    = flag.Bool("authz", false, "pemeriksaan otorisasi diferensial (butuh config + token)")
-		tuiMode     = flag.Bool("tui", false, "dashboard interaktif")
-		tuiDisabled = flag.Bool("no-tui", false, "paksa output teks biasa, tanpa dashboard")
+		exitZero    = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
+		noTUI       = flag.Bool("no-tui", false, "paksa output teks biasa, tanpa dashboard")
 		noDNSFix    = flag.Bool("no-dns-fallback", false, "jangan mencoba resolver publik saat DNS perangkat memblokir")
+
+		cfgPath  = flag.String("config", "", "file konfigurasi YAML (multi-target, token authz)")
+		_        = noCol
+		_        = asciiOnly
+		_        = width
+		runAuthz = flag.Bool("authz", false, "pemeriksaan otorisasi diferensial (butuh config + token)")
 	)
 	flag.Usage = usage
 	flag.Parse()
 
-	if *showVer {
-		fmt.Println(lumen.Banner())
+	if *versionFlag {
+		fmt.Printf("%s %s · %s · by %s\n", lumen.Name, lumen.Version, lumen.Tagline, lumen.Author)
 		return
 	}
-	// Config multi-target. Kalau ada, dia yang menentukan apa yang dipindai;
-	// -target dipakai untuk menambah satu target di luar config.
-	var cfg lumen.Config
-	if *cfgPath != "" {
-		var err error
-		if cfg, err = lumen.LoadConfig(*cfgPath); err != nil {
-			log.Fatalf("config: %v", err)
-		}
-		if cfg.Defaults.Delay != "" && *delay == defaultDelay {
-			if *delay, err = time.ParseDuration(cfg.Defaults.Delay); err != nil {
-				log.Fatalf("config defaults.delay: %v", err)
-			}
-		}
-		if cfg.Defaults.Conc > 0 && *conc == defaultConc {
-			*conc = cfg.Defaults.Conc
-		}
-		if cfg.Defaults.Timeout != "" && *timeout == defaultTimeout {
-			if *timeout, err = time.ParseDuration(cfg.Defaults.Timeout); err != nil {
-				log.Fatalf("config defaults.timeout: %v", err)
-			}
-		}
+
+	opts := plainOpts{
+		outDir: *outDir, conc: *conc, delay: *delay, timeout: *timeout,
+		doProbe: *noProbe, writeSARIF: *sarif, noDNSFix: *noDNSFix,
+		compact: *compact, quiet: *quiet,
+	}
+	_ = markdown // markdown selalu ditulis bersama JSON; flag kept for symmetry
+
+	cfg, err := loadConfigInto(&opts, *cfgPath)
+	if err != nil {
+		fatal("config: %v", err)
 	}
 
-	// Target boleh datang dari env var. Di HP, mengetik URL panjang di
-	// keyboard virtual itu lambat dan gampang nekan ENTER di tengah kata
-	// (yang terjadi ke kita: "-wi" + "dth"). Sekali set, selamanya pakai
-	// nama pendek.
-	if *target == "" {
-		*target = os.Getenv("LUMEN_TARGET")
-	}
-
-	// job didefinisikan di luar main supaya cmd/tui.go bisa memakainya
-	// saat menjalankan pemetaan ulang.
-	var jobs []job
-	for _, t := range cfg.Targets {
-		// Target authz hanya dipindai kalau authz diminta. Tanpa flag itu,
-		// pemetaan tetap jalan seperti biasa.
-		if t.Authz && !*runAuthz {
-			continue
-		}
-		jobs = append(jobs, job{t.Name, t.URL, t.Authz, t.Tokens})
-	}
-	if *target != "" {
-		j := job{url: *target, name: *stem}
-		if j.name == "" {
-			j.name = hostOf(j.url)
-		}
-		jobs = append(jobs, j)
-	}
-	if len(jobs) == 0 {
+	jobs, extraAuthz := resolveJobs(cfg, target, name, runAuthz)
+	if len(jobs) == 0 && !interactive(*noTUI) {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if *runAuthz && !cfg.HasAuthz() {
-		log.Fatalf("-authz butuh -config yang punya target dengan authz: true")
+
+	// Dashboard interaktif.(&: Beranda → riwayat → laporan.)
+	if interactive(*noTUI) && (len(jobs) == 0 || len(jobs) == 1 && *target != "") {
+		sh, err := newShell(opts)
+		if err != nil {
+			fatal("%v", err)
+		}
+		if len(jobs) == 1 {
+			// Target disebut di baris perintah: langsung pindai tanpa
+			// perlu mengetik ulang.
+			j := jobs[0]
+			j.authz = j.authz || extraAuthz
+			sh.pending = &j
+		}
+		if _, err := tea.NewProgram(sh, tea.WithAltScreen()).Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "dashboard tidak bisa dibuka:", err)
+			return
+		}
+		return
 	}
 
-	// Gaya tampilan ditentukan sekali, di sini, lalu diteruskan ke report.
-	// Deteksi otomatis: di Termux stdout bukan TTY saat di-pipe, jadi warna
-	// mati sendiri — dan LUMEN_COLOR=always menghidupkannya lagi.
-	style := lumen.DetectStyle(os.Stdout)
-	if *noCol || os.Getenv("NO_COLOR") != "" {
-		style.Color = false
-	}
-	if *ascii {
-		style.Unicode = false
-	}
-	if *width > 0 {
-		style.Width = *width
-	}
-
-	// Ctrl-C menghentikan dengan rapi dan tetap menulis laporan yang sudah
-	// terkumpul. Laporan parsial jauh lebih berguna daripada tidak ada.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sig
-		fmt.Fprintln(os.Stderr, "\ndihentikan — menulis laporan parsial")
-		cancelled = true
-		stop()
-	}()
-
+	// Jalur non-interaktif: semua target dipindai berurutan.
 	worst := 0
 	for _, j := range jobs {
-		u, err := url.Parse(j.url)
-		if err != nil || u.Host == "" {
-			log.Fatalf("URL tidak valid (%s): %v", j.url, err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			log.Fatalf("scheme harus http atau https, dapat %q (%s)", u.Scheme, j.url)
-		}
-
-		jobCtx, jobCancel := context.WithTimeout(context.Background(), *timeout)
-		start := time.Now()
-
-		// Preflight DNS. Di HP, Android dan beberapa operator membalas
-		// alamat loopback untuk domain yang diblokir. Gejalanya seperti
-		// server menolak koneksi, padahal tidak ada yang sampai ke server.
-		// Kalau sistem mengembalikan loopback, coba resolver publik lalu
-		// pin IP-nya supaya DNS tidak dicek lagi di tengah scan.
-		dial := (*lumen.PinnedDialer)(nil)
-		dnsNote := ""
-		if !*noDNSFix {
-			host := u.Hostname()
-			port := u.Port()
-			if port == "" {
-				port = map[bool]string{true: "443", false: "80"}[u.Scheme == "https"]
-			}
-			dres, err := lumen.PreflightDNS(jobCtx, host)
-			if err != "" && len(dres.IPs) == 0 {
-				// Semua resolver gagal: tetap coba scan dengan DNS sistem
-				// supaya laporan tetap menunjukkan pesan error aslinya.
-				dnsNote = err
-			} else if dres.Fallback && len(dres.IPs) > 0 {
-				dial = lumen.NewPinnedDialer(host, dres.IPs[0], port)
-				dnsNote = "DNS perangkat memblokir; scan memakai " + dres.Used + " → " + dres.IPs[0]
-			} else if dres.Used == "sistem" && !*quiet {
-				dnsNote = "DNS: " + strings.Join(dres.IPs, ", ")
-			}
-		}
-
-		mcfg := lumen.MapperConfig{Target: u, Conc: *conc, Delay: *delay}
-		if dial != nil {
-			mcfg.DialContext = dial.DialContext
-		}
-		m := lumen.NewMapper(mcfg)
-		m.Run(jobCtx)
-		pages, eps, findings, stats := m.Snapshot()
-
-		if *doProbe {
-			applyProbe(jobCtx, m, &eps, &findings, *conc)
-		}
-		findings = lumen.BySeverity(findings)
-
-		cands := lumen.Classify(eps, findings)
-		cov := lumen.BuildCoverage(lumen.Report{Stats: stats})
-
-		rep := lumen.Report{
-			Target:      u.String(),
-			GeneratedAt: time.Now().UTC(),
-			DurationMS:  time.Since(start).Milliseconds(),
-			Pages:       pages,
-			Endpoints:   eps,
-			Findings:    findings,
-			ScopeDenied: m.Scope().Denied(),
-			RootError:   m.RootError(),
-			DNSNote:     dnsNote,
-			Stats:       stats,
-			Candidates:  cands,
-			Coverage:    cov,
-		}
-
-		// Pemeriksaan otorisasi diferensial. Hanya GET; endpoint write tidak
-		// pernah dipanggil karena memanggilnya berarti menjalankan write yang
-		// tidak perlu terjadi hanya untuk membuktikan sesuatu.
-		var authzReps []lumen.AuthzReport
-		if j.authz {
-			tg := lumen.Target{Name: j.name, URL: j.url, Authz: true, Tokens: j.toks}
-			names := tg.TokenNames()
-			if len(names) < 2 {
-				log.Fatalf("target %s: authz butuh minimal 2 perspektif", j.name)
-			}
-			opts := lumen.AuthzOptions{
-				Baseline:  "anon",
-				Compare:   names[1:],
-				DelayMS:   int(delay.Milliseconds()),
-				OnlyPaths: cfg.Defaults.AuthzOnly,
-				SkipPaths: cfg.Defaults.AuthzSkip,
-			}
-			ar, err := lumen.RunAuthz(jobCtx, tg.HTTPClient(), tg, eps, opts)
-			if err != nil && jobCtx.Err() == nil {
-				log.Fatalf("authz %s: %v", j.name, err)
-			}
-			for _, r := range ar.Results {
-				if f := lumen.FindingFromAuthz(r); f != nil {
-					rep.Findings = append(rep.Findings, *f)
-				}
-			}
-			rep.Findings = lumen.BySeverity(rep.Findings)
-			rep.Authz = &ar
-			authzReps = append(authzReps, ar)
-		}
-
-		code := lumen.ExitCode(lumen.Report{Stats: stats}, cands)
-		if j.authz && code == 0 {
-			code = lumen.ExitCode(rep, cands)
-		}
-		if code > worst {
-			worst = code
-		}
-
-		name := j.name
-		if name == "" {
-			name = sanitise(u.Hostname())
-		}
-		if err := os.MkdirAll(*outDir, 0o700); err != nil {
-			log.Fatalf("gagal membuat folder output: %v", err)
-		}
-		jsonPath := filepath.Join(*outDir, name+".json")
-		textPath := filepath.Join(*outDir, name+".txt")
-		compact := *compact || style.Width < 70
-		if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov, compact, authzReps); err != nil {
-			log.Fatalf("gagal menulis laporan: %v", err)
-		}
-
-		// SARIF 2.1.0: format yang sudah dipahami GitHub code scanning,
-		// GitLab, dan sebagian besar pipeline.
-		sarifPath := filepath.Join(*outDir, name+".sarif")
-		if *sarif {
-			if err := lumen.WriteSARIF(sarifPath, lumen.BuildSARIF(rep, cands, cov, code)); err != nil {
-				log.Fatalf("gagal menulis SARIF: %v", err)
-			}
-		}
-
-		if *quiet {
-			jobCancel()
-			continue
-		}
-
-		// TUI hanya masuk akal untuk satu target: kalau beberapa, pengguna
-		// tidak bisa tahu sedang melihat yang mana tanpa menambah Kali ini
-		// jadi pilihan, bukan kewajiban.
-		useTUI := false
-		if *tuiMode || !*tuiDisabled {
-			useTUI = len(jobs) == 1 && isTerminal(os.Stdout)
-		}
-		if useTUI {
-			runTUI(name, &rep, cands, cov, compact, authzReps, jsonPath, textPath, sarifPath, *sarif, *conc, *delay, *timeout, *doProbe, j)
-		} else {
-			fmt.Print(lumen.Render(rep, style, cands, cov, compact, authzReps))
-			fmt.Print(lumen.Footer(jsonPath, textPath, style, sarifPath, *sarif))
-		}
-		jobCancel()
-
-		if cancelled {
-			break
+		j.authz = j.authz || extraAuthz
+		runPlain(j, opts)
+		if r, err := lastExitCode(&opts, j); err == nil && r > worst {
+			worst = r
 		}
 	}
-
-	// Exit code hanya berarti kalau aman dipakai di pipeline; kalau human
-	// yang menjalankan dari terminal, keluar dengan kode bukan error
-	// membingungkan.
-	if *exitZero || cancelled {
+	if *exitZero {
 		return
 	}
 	os.Exit(worst)
+}
+
+// interactive menandai apakah dashboard boleh dipakai.
+func interactive(noTUI bool) bool { return !noTUI && isTerminal(os.Stdout) }
+
+// lastExitCode menghitung kode keluar dari run terakhir sebuah target.
+func lastExitCode(opts *plainOpts, j job) (int, error) {
+	store, err := lumen.OpenStore(opts.outDir)
+	if err != nil {
+		return 0, err
+	}
+	var latest *lumen.Run
+	for _, r := range store.Runs() {
+		if r.Target == j.url || strings.Contains(r.Target, j.name) {
+			rr := r
+			latest = &rr
+		}
+	}
+	if latest == nil {
+		return 0, nil
+	}
+	rep, err := store.LoadRun(*latest)
+	if err != nil {
+		return 0, err
+	}
+	return lumen.ExitCode(*rep, rep.Candidates), nil
+}
+
+// loadConfigInto menerapkan nilai bawaan dari file konfigurasi ke opts.
+func loadConfigInto(opts *plainOpts, path string) (lumen.Config, error) {
+	var cfg lumen.Config
+	if path == "" {
+		return cfg, nil
+	}
+	cfg, err := lumen.LoadConfig(path)
+	if err != nil {
+		return cfg, err
+	}
+	if cfg.Defaults.Delay != "" && opts.delay == defaultDelay {
+		if opts.delay, err = time.ParseDuration(cfg.Defaults.Delay); err != nil {
+			return cfg, fmt.Errorf("config defaults.delay: %w", err)
+		}
+	}
+	if cfg.Defaults.Conc > 0 && opts.conc == defaultConc {
+		opts.conc = cfg.Defaults.Conc
+	}
+	if cfg.Defaults.Timeout != "" && opts.timeout == defaultTimeout {
+		if opts.timeout, err = time.ParseDuration(cfg.Defaults.Timeout); err != nil {
+			return cfg, fmt.Errorf("config defaults.timeout: %w", err)
+		}
+	}
+	opts.doProbe = cfg.Defaults.Probe || opts.doProbe
+	return cfg, nil
+}
+
+// resolveJobs menyusun daftar target dari config dan flag.
+func resolveJobs(cfg lumen.Config, target, name *string, authz *bool) ([]job, bool) {
+	var out []job
+	extra := *authz
+	for _, t := range cfg.Targets {
+		if t.Authz && !extra {
+			continue
+		}
+		out = append(out, job{name: t.Name, url: t.URL, authz: t.Authz, toks: t.Tokens})
+	}
+	if *target != "" {
+		j := job{url: *target, name: *name}
+		if j.name == "" {
+			j.name = hostOf(*target)
+		}
+		out = append(out, j)
+	}
+	return out, extra
+}
+
+func fatal(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	os.Exit(2)
 }
 
 // job adalah satu target yang akan dipindai. Didefinisikan di level

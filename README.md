@@ -248,3 +248,81 @@ Di Termux/HP menuju production orang lain, `-delay 1s -conc 2`.
   literal) masuk apa adanya: `/admin/users/${id}`.
 - `probe` hanya `OPTIONS`; servis yang tidak menangani `OPTIONS` akan terlihat
   405 walau `GET`-nya sebenarnya terbuka.
+
+## Beranda dan riwayat
+
+Menjalankan `lumen` tanpa `-target` membuka beranda, bukan langsung memindai.
+
+```
+  ██╗      ██╗   ██╗███╗   ███╗███████╗███╗   ██╗
+  ...
+  pemeta permukaan aplikasi web  →  by 0xlzy
+
+  Riwayat scan (2 target)
+
+  ▸ parama-stag.coba-sam.com   HIGH  2 jam lalu  3×
+    staging.kantor.internal             12 menit lalu  1×
+
+  ↑↓ pilih · enter riwayat · s scan ulang · n scan baru · q keluar
+```
+
+Alasannya: hasil scan jarang terjadi, tapi dibaca yang sering. Membuka hasil
+lama tidak boleh butuh mengetik URL lagi.
+
+| tombol | di daftar | di riwayat | di input |
+|---|---|---|---|
+| `↑` `↓` | pindah target | pindah run | — |
+| `enter` | lihat riwayat | buka laporan | mulai scan |
+| `esc` | keluar | kembali | batal |
+| `n` | scan baru | — | — |
+| `s` | scan ulang target ini | — | — |
+| `r` | muat ulang daftar | — | — |
+| `q` | keluar | keluar | — |
+
+Setiap scan disimpan sebagai berkas sendiri dengan nama stempel waktu, bukan
+menimpa. Tanpa itu, "temuan yang sama muncul lagi" tidak bisa dibedakan dari
+"temuan yang benar-benar berulang".
+
+```
+out/index.json                          daftar semua run
+out/<target>/<stempel>.json             laporan lengkap
+out/<target>/<stempel>.md               laporan untuk agent AI
+out/<target>/<stempel>.sarif            untuk GitHub code scanning
+```
+
+Kalau `index.json` hilang, `lumen` mulai dari daftar kosong dan bisa dibangun
+ulang dari isi folder.
+
+## Laporan untuk agent AI
+
+Setiap scan juga menulis `.md`. Formatnya dibuat untuk dibaca mesin lebih dulu:
+
+```markdown
+---
+schema: lumen/1
+tool: lumen 0.4.0
+target: https://app.example.com
+scanned_at: 2026-10-02T06:09:18Z
+verdict: PERLU TINDAKAN — 2 temuan high
+---
+
+# lumen — https://app.example.com
+
+**PERLU TINDAKAN — 2 temuan high.** 1 halaman, 76 endpoint, 9 temuan, …
+```
+
+Yang membuatnya berguna untuk agent:
+
+- **Satu paragraf ringkasan di atas.** Agent bisa memutuskan perlu membaca
+  seluruh dokumen atau berhenti di situ.
+- **Kandidat digabung per aturan.** `Classify` mengembalikan satu kandidat
+  per endpoint; laporan menagih 40 endpoint dengan pola sama jadi 4. bagian,
+  bukan 40. Versi tanpa penggabungan menghasilkan 52 KB yang 40 KB-nya
+  pengulangan.
+- **Bagian `Cakupan` wajib ada.** Menyatakan apa yang *tidak* diuji. Tanpa
+  ini, "tidak menemukan apa-apa" dan "tidak sempat memeriksa" menjadi kalimat
+  yang sama.
+- **Kegagalan scan dinyatakan eksplisit.** Kalau halaman awal gagal diambil,
+  ada blok `SCAN GAGAL` yang menyatakan hasilnya tidak boleh dibaca sebagai
+  "situs ini bersih".
+- **Setiap kandidat punya langkah verifikasi**, bukan hanya nama kategori.

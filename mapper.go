@@ -129,9 +129,17 @@ func (m *Mapper) bump(k string) {
 }
 
 func (m *Mapper) finding(kind string, sev Severity, where, detail string) {
+	m.findingT(kind, sev, where, detail, "")
+}
+
+// findingT sama dengan finding, tapi judul dan penjelasan dipisah.
+//
+// Kalau penjelasan tidak diberikan, Detail diisi penuh dan Title dikosongkan
+// supaya data lama yang tidak punya Title tetap terbaca utuh.
+func (m *Mapper) findingT(kind string, sev Severity, where, title, detail string) {
 	m.mu.Lock()
 	m.findings = append(m.findings, Finding{
-		Kind: kind, Severity: sev, Where: where, Detail: detail,
+		Title: title, Kind: kind, Severity: sev, Where: where, Detail: detail,
 	})
 	m.mu.Unlock()
 }
@@ -374,22 +382,31 @@ func (m *Mapper) followForms(page, body string) {
 	}
 }
 
+// Header keamanan yang diperiksa, beserta akibat kalau absen.
+//
+// Catatan ditulis sebagai akibat, bukan sebagai pengulangan nama header.
+// "Strict-Transport-Security tidak ada — hSTS tidak ada" tidak menambah
+// informasi apa pun dan hanya membuang ruang di laporan.
 var securityHeaders = []struct {
-	Name string
-	Sev  Severity
-	Note string
+	Name   string
+	Sev    Severity
+	Impact string
 }{
-	{"Strict-Transport-Security", SevHigh, "hSTS tidak ada"},
-	{"Content-Security-Policy", SevHigh, "CSP tidak ada"},
-	{"X-Frame-Options", SevMedium, "bisa di-embed iframe (clickjacking)"},
-	{"Referrer-Policy", SevLow, "referrer policy tidak ada"},
+	{"Strict-Transport-Security", SevHigh,
+		"HTTPS masih bisa diturunkan ke HTTP oleh penyerang, dan peramban akan mengirim cookie sesi lewat koneksi tidak terenkripsi."},
+	{"Content-Security-Policy", SevHigh,
+		"Tidak ada pembatasan asal skrip. Jika ada satu titik injeksi di halaman, skrip dari domain mana pun bisa dieksekusi."},
+	{"X-Frame-Options", SevMedium,
+		"Halaman bisa dibungkus iframe oleh situs lain, sehingga pengguna bisa ditipu menekan tombol yang terlihat dari situs tersebut."},
+	{"Referrer-Policy", SevLow,
+		"URL lengkap halaman terbaca situs lain lewat header Referer, termasuk path yang bisa memuat identifier."},
 }
 
 func (m *Mapper) checkHeaders(pg *Page, hdr http.Header, raw string) {
 	pg.Headers = map[string]string{}
 	for _, sh := range securityHeaders {
 		if v := hdr.Get(sh.Name); v == "" {
-			m.finding("header", sh.Sev, raw, sh.Name+" tidak ada — "+sh.Note)
+			m.findingT("header", sh.Sev, raw, sh.Name+" tidak dikirim", sh.Impact)
 		} else {
 			pg.Headers[sh.Name] = v
 		}
