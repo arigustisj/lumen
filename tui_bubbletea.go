@@ -41,6 +41,7 @@ var panels = []Panel{
 	{Key: "endpoint", Title: "Endpoint", Render: renderEndpoint},
 	{Key: "kandidat", Title: "OWASP", Render: renderKandidat},
 	{Key: "authz", Title: "Authz", Render: renderAuthz},
+	{Key: "perubahan", Title: "Perubahan", Render: renderPerubahan},
 	{Key: "cakupan", Title: "Cakupan", Render: renderCakupan},
 }
 
@@ -73,10 +74,13 @@ type TickMsg struct{}
 
 // TUIModel adalah seluruh state TUI.
 type TUIModel struct {
-	rep    *Report
-	cands  []Candidate
-	cov    Coverage
-	authz  []AuthzReport
+	rep   *Report
+	cands []Candidate
+	cov   Coverage
+	authz []AuthzReport
+	// diff menyimpan perbandingan dengan scan sebelumnya. Nil berarti
+	// belum ada baseline — panel harus mengatakannya, bukan menampilkan ruang kosong.
+	diff   *DiffResults
 	target string
 
 	phase Phase
@@ -108,6 +112,12 @@ func NewTUIModel(target string) *TUIModel {
 		tick:   0,
 	}
 }
+
+// SetDiff memasang perbandingan dengan scan sebelumnya.
+//
+// Diff hanya bisa_INSTALL setelah panel sudah ada; pemanggil yang tahu store
+// yang harus menyediakannya.
+func (m *TUIModel) SetDiff(d *DiffResults) { m.diff = d }
 
 // SkipIntro mematikan layar pembuka untuk laporan yang dimuat dari disk.
 //

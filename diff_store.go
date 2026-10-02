@@ -42,3 +42,61 @@ func (s *Store) LoadPair(newer, older *Run) (*Report, *Report, error) {
 	}
 	return nr, or, nil
 }
+
+// DiffAgainstPrevious membandingkan sebuah laporan dengan scan sebelumnya
+// untuk target yang sama.
+//
+// Kalau laporan itu sendiri adalah scan terbaru, yang dibandingkan adalah
+// run sebelum baseline-nya — supaya "terakhir" dan "sebelumnya" tidak
+// tertukar.
+//
+// Mengembalikan nil kalau tidak ada baseline. Pemanggil wajib menangani
+// nil sebagai "belum bisa dinilai", bukan sebagai "tidak ada perubahan".
+func (s *Store) DiffAgainstPrevious(rep *Report) *DiffResults {
+	if rep == nil {
+		return nil
+	}
+	var matched []Run
+	for _, r := range s.Runs() {
+		if r.Target == rep.Target || stripScheme(r.Target) == stripScheme(rep.Target) {
+			matched = append(matched, r)
+		}
+	}
+
+	// Cari posisi laporan ini di riwayat. Kalau tidak ketemu (misalnya
+	// laporan yang dihitung ulang di luar store), pakai run terakhir yang
+	// waktunya berbeda.
+	var base *Run
+	for _, r := range matched {
+		if r.At.Equal(rep.GeneratedAt) {
+			if idx := indexOfRun(matched, r); idx >= 0 && idx+1 < len(matched) {
+				base = &matched[idx+1]
+			}
+			break
+		}
+	}
+	if base == nil && len(matched) > 0 {
+		last := matched[0]
+		if !last.At.Equal(rep.GeneratedAt) {
+			base = &last
+		}
+	}
+	if base == nil {
+		return nil
+	}
+	oldRep, err := s.LoadRun(*base)
+	if err != nil {
+		return nil
+	}
+	d := DiffReports(oldRep, rep)
+	return &d
+}
+
+func indexOfRun(runs []Run, want Run) int {
+	for i := range runs {
+		if runs[i].File == want.File {
+			return i
+		}
+	}
+	return -1
+}

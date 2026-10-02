@@ -317,6 +317,7 @@ func (s *shell) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m := lumen.NewTUIModel(rep.Target)
 		m.Seed(rep, rep.Candidates, rep.Coverage, authz)
+		m.SetDiff(s.store.DiffAgainstPrevious(rep))
 		mm, _ := m.Update(tea.WindowSizeMsg{Width: s.home.Width(), Height: s.home.Height()})
 		s.report = mm.(*lumen.TUIModel)
 		return s, nil

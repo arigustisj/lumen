@@ -92,6 +92,9 @@ func (h *HomeModel) LoadedReport(rep *Report, cands []Candidate, cov Coverage, a
 	m := NewTUIModel(rep.Target)
 	m.Seed(rep, cands, cov, authz)
 	m.SkipIntro()
+	// Laporan lama ikut dibandingkan dengan scan sebelumnya supaya panel
+	// Perubahan tidak kosong hanya karena yang dibuka bukan scan terakhir.
+	m.SetDiff(h.m.store.DiffAgainstPrevious(rep))
 	return m
 }
 

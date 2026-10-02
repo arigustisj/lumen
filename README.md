@@ -387,3 +387,43 @@ diff_since: 2026-10-01 15:04
 diff_new_findings: 2
 diff_new_endpoints: 3
 ```
+
+## Panel Perubahan
+
+Tujuh panel di dashboard, yang terakhir membandingkan laporan aktif dengan scan
+sebelumnya untuk target yang sama:
+
+```
+tab → Perubahan
+
+  +1 high
+
+  TEMUAN BARU  1
+    ▲ Endpoint admin terbuka
+
+  ENDPOINT BARU  1
+    + GET /api/admin
+
+  1 endpoint tetap · 1 temuan tetap
+```
+
+Panel ini juga terisi saat membuka laporan lama dari riwayat, bukan cuma
+setelah scan baru.
+
+### Tiga kondisi, tiga tampilan
+
+| kondisi | yang ditampilkan |
+|---|---|
+| ada perubahan | daftar perubahan |
+| tidak ada perubahan | `tidak ada perubahan` + jumlah yang tetap |
+| **tidak ada baseline** | `belum ada yang bisa dibandingkan` |
+
+Yang ketiga yang paling penting. Menampilkan "tidak ada perubahan" saat
+baseline-nya memang belum ada akan membuat pembaca menyimpulkan aplikasinya
+tidak berubah sejak update terakhir — padahal tidak ada yang dibandingkan
+sama sekali.
+
+Untuk laporan yang juga bisa dibuka dari riwayat, panel memakai
+`DiffAgainstPrevious` yang mencari posisi laporan itu di riwayat, lalu
+membandingkannya dengan run berikutnya — supaya "terakhir" dan "sebelumnya"
+tidak tertukar.
