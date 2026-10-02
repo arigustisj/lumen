@@ -59,6 +59,7 @@ func main() {
 		compact     = flag.Bool("compact", false, "ringkas: batas daftar per kategori")
 		exitZero    = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
 		noTUI       = flag.Bool("no-tui", false, "paksa output teks biasa, tanpa dashboard")
+		withDiff    = flag.Bool("diff", false, "bandingkan dengan scan sebelumnya untuk target yang sama")
 		noDNSFix    = flag.Bool("no-dns-fallback", false, "jangan mencoba resolver publik saat DNS perangkat memblokir")
 
 		cfgPath  = flag.String("config", "", "file konfigurasi YAML (multi-target, token authz)")
@@ -78,7 +79,7 @@ func main() {
 	opts := plainOpts{
 		outDir: *outDir, conc: *conc, delay: *delay, timeout: *timeout,
 		doProbe: *noProbe, writeSARIF: *sarif, noDNSFix: *noDNSFix,
-		compact: *compact, quiet: *quiet,
+		compact: *compact, quiet: *quiet, withDiff: *withDiff,
 	}
 	_ = markdown // markdown selalu ditulis bersama JSON; flag kept for symmetry
 

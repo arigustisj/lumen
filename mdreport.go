@@ -23,38 +23,79 @@ const mdSchema = "lumen/1"
 
 // WriteMarkdown menulis laporan .md untuk agent AI.
 func WriteMarkdown(path string, rep *Report, cands []Candidate, cov Coverage, run Run) error {
+	return WriteMarkdownDiff(path, rep, cands, cov, run, nil)
+}
+
+// WriteMarkdownDiff menulis laporan .md, ditambah bagian perubahan bila
+// ada baseline.
+//
+// Bagian perubahan ditaruh paling atas, sebelum daftar temuan. Agent yang
+// punya tugas "apa yang berubah sejak kemarin" shouldn't perlu menggulir
+// seluruh laporan untuk menjawabnya.
+func WriteMarkdownDiff(path string, rep *Report, cands []Candidate, cov Coverage, run Run, d *DiffResults) error {
 	var b strings.Builder
-	writeMarkdown(&b, rep, cands, cov, run)
+	// Frontmatter ditulis dulu, lalu bagian perubahan, lalu isi laporan.
+	//
+	// Urutan ini bukan soal tampilan: frontmatter YAML hanya dikenali
+	// kalau berada di baris paling atas dokumen. Kalau bagian perubahan
+	// ditulis sebelum itu, semua parser YAML akan menganggap seluruh
+	// Berkeleylideran metadata hilang.
+	writeFrontmatter(&b, rep, d)
+	if d != nil {
+		writeDiffSection(&b, *d)
+		b.WriteString("\n---\n\n")
+	}
+	writeMarkdownBody(&b, rep, cands, cov, run)
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
-func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Coverage, run Run) {
+// writeFrontmatter menulis blok YAML di paling atas dokumen.
+//
+// Harus berada di baris paling atas file: YAML frontmatter yang tidak
+// langsung di awal akan dianggap teks biasa oleh parser mana pun.
+func writeFrontmatter(b *strings.Builder, rep *Report, d *DiffResults) {
 	w := func(format string, a ...any) { fmt.Fprintf(b, format+"\n", a...) }
-
-	// ── Ringkasan ──────────────────────────────────────────────────────────
-	// Ditulis lebih dulu dan satu paragraf, supaya pembaca bisa memutuskan
-	// perlu membaca seluruh dokumen atau tidak tanpa menggulir.
-	verdict := "TIDAK ADA TEMUAN"
-	if n := countSeverity(rep.Findings, SevHigh); n > 0 {
-		verdict = fmt.Sprintf("PERLU TINDAKAN — %d temuan high", n)
-	} else if n := countSeverity(rep.Findings, SevMedium); n > 0 {
-		verdict = fmt.Sprintf("PERIKSA — %d temuan medium", n)
-	} else if len(rep.Findings) > 0 {
-		verdict = fmt.Sprintf("RESIKO RENDAH — %d temuan low/info", len(rep.Findings))
-	}
-
 	w("---")
 	w("schema: %s", mdSchema)
 	w("tool: %s %s", Name, Version)
 	w("target: %s", rep.Target)
 	w("scanned_at: %s", rep.GeneratedAt.UTC().Format(time.RFC3339))
-	w("verdict: %s", verdict)
+	w("verdict: %s", markdownVerdict(rep))
+	if d != nil {
+		w("diff_since: %s", d.OldAt)
+		w("diff_new_findings: %d", len(d.NewFindings))
+		w("diff_new_endpoints: %d", len(d.NewEndpoints))
+	}
 	w("---")
 	w("")
+}
+
+// markdownVerdict menghitung satu baris penilaian untuk frontmatter.
+func markdownVerdict(rep *Report) string {
+	if n := countSeverity(rep.Findings, SevHigh); n > 0 {
+		return fmt.Sprintf("PERLU TINDAKAN - %d temuan high", n)
+	}
+	if n := countSeverity(rep.Findings, SevMedium); n > 0 {
+		return fmt.Sprintf("PERIKSA - %d temuan medium", n)
+	}
+	if len(rep.Findings) > 0 {
+		return fmt.Sprintf("RESIKO RENDAH - %d temuan low/info", len(rep.Findings))
+	}
+	return "TIDAK ADA TEMUAN"
+}
+
+func writeMarkdownBody(b *strings.Builder, rep *Report, cands []Candidate, cov Coverage, run Run) {
+	w := func(format string, a ...any) { fmt.Fprintf(b, format+"\n", a...) }
+	verdict := markdownVerdict(rep)
+
+	// ── Ringkasan ─────────────────────────────────────────────────────────
+	// Satu paragraf, ditulis lebih dulu supaya pembaca bisa memutuskan
+	// perlu membaca seluruh dokumen atau berhenti di sini.
 	w("# %s — %s", Name, rep.Target)
 	w("")
 	w("**%s.** %d halaman, %d endpoint, %d temuan (%s), %d kandidat OWASP. Dipindai dalam %s.",
-		verdict, len(rep.Pages), len(rep.Endpoints), len(rep.Findings), severityBreakdown(rep.Findings), len(cands), fmtDuration(rep.DurationMS))
+		verdict, len(rep.Pages), len(rep.Endpoints), len(rep.Findings),
+		severityBreakdown(rep.Findings), len(cands), fmtDuration(rep.DurationMS))
 	w("")
 
 	if rep.RootError != "" {
@@ -67,7 +108,7 @@ func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Cover
 		w("")
 	}
 
-	// ── Temuan ─────────────────────────────────────────────────────────────
+	// ── Temuan ────────────────────────────────────────────────────────────
 	high := filterSeverity(rep.Findings, SevHigh)
 	medium := filterSeverity(rep.Findings, SevMedium)
 	rest := otherFindings(rep.Findings)
@@ -100,12 +141,11 @@ func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Cover
 		w("")
 	}
 
-	// ── Kandidat OWASP ─────────────────────────────────────────────────────
+	// ── Kandidat OWASP ────────────────────────────────────────────────────
 	if groups := GroupCandidates(cands); len(groups) > 0 {
-		total := len(cands)
 		w("## Kandidat OWASP")
 		w("")
-		w("%d kandidat dari %d aturan berbeda. Semuanya sinyal statis — belum ada yang terbukti.", total, len(groups))
+		w("%d kandidat dari %d aturan berbeda. Semuanya sinyal statis — belum ada yang terbukti.", len(cands), len(groups))
 		w("")
 		for _, g := range groups {
 			w("### %s %s — %d endpoint", g.Category, g.Title, g.Count)
@@ -133,12 +173,12 @@ func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Cover
 		}
 	}
 
-	// ── Authz ──────────────────────────────────────────────────────────────
+	// ── Authz ─────────────────────────────────────────────────────────────
 	if rep.Authz != nil {
 		writeAuthzSection(b, *rep.Authz)
 	}
 
-	// ── Endpoint ───────────────────────────────────────────────────────────
+	// ── Endpoint ──────────────────────────────────────────────────────────
 	if len(rep.Endpoints) > 0 {
 		w("## Endpoint")
 		w("")
@@ -167,7 +207,7 @@ func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Cover
 		}
 	}
 
-	// ── Cakupan ────────────────────────────────────────────────────────────
+	// ── Cakupan ───────────────────────────────────────────────────────────
 	// Bagian yang paling sering dihapus dari laporan, dan paling penting.
 	// Tanpa ini, "tidak menemukan apa-apa" dan "tidak sempat memeriksa"
 	// menjadi kalimat yang sama.
@@ -198,7 +238,7 @@ func writeMarkdown(b *strings.Builder, rep *Report, cands []Candidate, cov Cover
 		w("")
 	}
 
-	if len(run.Target) > 0 {
+	if run.Target != "" {
 		w("---")
 		w("run: %s  ·  file: %s", run.At.UTC().Format(time.RFC3339), run.File)
 	}
@@ -319,4 +359,92 @@ func severityBreakdown(fs []Finding) string {
 		return "0"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// writeDiffSection menulis bagian perubahan dalam bentuk markdown.
+func writeDiffSection(b *strings.Builder, d DiffResults) {
+	w := func(format string, a ...any) { fmt.Fprintf(b, format+"\n", a...) }
+
+	w("## Perubahan sejak %s", d.OldAt)
+	w("")
+	w("Dibandingkan dengan scan sebelumnya untuk target yang sama. ")
+	w("Findings: +%d baru, %d hilang, %d tidak berubah. Endpoint: +%d baru, %d hilang, %d tetap.",
+		len(d.NewFindings), len(d.ResolvedFindings), d.KeptFindings,
+		len(d.NewEndpoints), len(d.RemovedEndpoints), d.KeptEndpoints)
+	w("")
+
+	// Peringatan cakupan mengulang poin yang sama dalam bentuk yang bisa
+	// diambil agent: perubahan di bawah ini bisa jadi artefak scan, bukan
+	// perubahan aplikasi.
+	if !d.CoverageComparable {
+		w("> **PERINGATAN KAKUPAN.** %s.", d.CoverageNote)
+		w("> Daftar perubahan di bawah mungkin tidak mencerminkan perubahan nyata pada aplikasi.")
+		w("")
+	}
+
+	if len(d.NewFindings) > 0 {
+		w("### Temuan baru (%d)", len(d.NewFindings))
+		w("")
+		w("| severity | temuan |")
+		w("|---|---|")
+		for _, f := range d.NewFindings {
+			w("| %s | %s |", f.Severity, mdEscape(findingTitle(f)))
+		}
+		w("")
+	}
+
+	if len(d.ResolvedFindings) > 0 {
+		// Judulnya sengaja tidak "perbaikan". Tanpa bukti lain,hilangnya
+		// temuan bisa berarti scan yang tidak tuntas.
+		label := "Temuan tidak muncul lagi"
+		if d.CoverageComparable {
+			label = "Temuan hilang"
+		}
+		w("### %s (%d)", label, len(d.ResolvedFindings))
+		w("")
+		w("| severity | temuan |")
+		w("|---|---|")
+		for _, f := range d.ResolvedFindings {
+			w("| %s | %s |", f.Severity, mdEscape(findingTitle(f)))
+		}
+		w("")
+	}
+
+	if len(d.NewEndpoints) > 0 {
+		w("### Endpoint baru (%d)", len(d.NewEndpoints))
+		w("")
+		for _, e := range d.NewEndpoints {
+			w("- `%s`", e)
+		}
+		w("")
+	}
+	if len(d.RemovedEndpoints) > 0 {
+		label := "Endpoint hilang"
+		if !d.CoverageComparable {
+			label = "Endpoint tidak terlihat"
+		}
+		w("### %s (%d)", label, len(d.RemovedEndpoints))
+		w("")
+		for _, e := range d.RemovedEndpoints {
+			w("- `%s`", e)
+		}
+		w("")
+	}
+	if !d.HasChanges() {
+		w("Tidak ada perubahan sejak scan sebelumnya.")
+		w("")
+	}
+}
+
+func findingTitle(f Finding) string {
+	if f.Title != "" {
+		return f.Title
+	}
+	return firstLineOf(f.Detail)
+}
+
+// mdEscape memanggil karakter yang akan merusak tabel markdown.
+func mdEscape(s string) string {
+	r := strings.NewReplacer("|", "\\|", "\n", " ")
+	return r.Replace(s)
 }

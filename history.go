@@ -44,8 +44,9 @@ type Run struct {
 
 // Store adalah kumpulan run milik satu folder output.
 type Store struct {
-	Dir  string
-	runs []Run
+	Dir    string
+	runs   []Run
+	loaded bool
 }
 
 // OpenStore membuka (atau membuat) penyimpanan di folder yang diberikan.
@@ -81,7 +82,14 @@ func (s *Store) LoadIndex() error {
 func (s *Store) indexPath() string { return filepath.Join(s.Dir, "index.json") }
 
 // Runs mengembalikan semua run, terbaru dulu.
+//
+// Index dimuat otomatis kalau belum. Setiap pemanggilan CLI membuat Store
+// baru, jadi tanpa pemuatan otomatis di sini semua pembaca akan melihat
+// daftar kosong — gejalanya persis seperti "riwayat mysteriously hilang".
 func (s *Store) Runs() []Run {
+	if !s.loaded {
+		_ = s.LoadIndex()
+	}
 	s.sort()
 	return s.runs
 }
@@ -136,6 +144,16 @@ func (s *Store) Targets() []TargetGroup {
 // penulisan index gagal, laporannya tetap ada — hanya daftarnya yang perlu
 // dibangun ulang dari folder.
 func (s *Store) SaveRun(rep *Report, when time.Time) (Run, error) {
+	// Index harus dimuat dulu kalau belum.
+	//
+	// Tanpa ini, setiap SaveRun menulis index yang hanya berisi run itu
+	// saja: tiap pemanggilan CLI menimpa index.json, dan riwayat tinggal satu item padahal berkasnya semua masih ada di disk. Kehilangan ini
+	// diam-diam — tidak ada error, hanya tidak ada bedanya "scan pertama"
+	// dengan "scan kedua".
+	if !s.loaded {
+		_ = s.LoadIndex()
+	}
+
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return Run{}, err
 	}

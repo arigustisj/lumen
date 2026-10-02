@@ -22,13 +22,49 @@ func runPlain(j job, opts plainOpts) int {
 		fmt.Fprintln(os.Stderr, "gagal menyiapkan folder output:", err)
 		return 1
 	}
+	// Baseline diambil sebelum run baru disimpan, supaya diff membandingkan
+	// dengan scan sebelumnya — bukan dengan dirinya sendiri.
+	var baseline *lumen.Report
+	diffNote := ""
+	if opts.withDiff {
+		_, old, err := store.LatestTwo(rep.Target)
+		switch {
+		case err != nil:
+			diffNote = "belum ada riwayat untuk target ini — scan ini jadi baseline"
+		case old == nil:
+			diffNote = "baru scan pertama untuk target ini — scan berikutnya bisa dibandingkan"
+		default:
+			if r, err := store.LoadRun(*old); err == nil {
+				baseline = r
+			} else {
+				diffNote = "baseline sebelumnya tidak bisa dibaca: " + err.Error()
+			}
+		}
+	}
+
 	run, err := store.SaveRun(rep, time.Now())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gagal menyimpan laporan:", err)
 	}
+	var dres *lumen.DiffResults
+	if opts.withDiff {
+		style := lumen.DetectStyle(os.Stdout)
+		if style.Width > 72 {
+			style.Width = 72
+		}
+		if baseline != nil {
+			d := lumen.DiffReports(baseline, rep)
+			dres = &d
+			fmt.Print(lumen.RenderDiff(d, style))
+		} else if diffNote != "" {
+			// Dinyatakan, bukan dibiarkan kosong. Tanpa ini, -diff pada
+			// scan kedua terlihat sama dengan "tidak ada perubahan".
+			fmt.Printf("\n  %s\n\n", lumen.DimText("diff: "+diffNote))
+		}
+	}
 	base := filepath.Join(opts.outDir, run.File)
-	if err := lumen.WriteMarkdown(strings.TrimSuffix(base, ".json")+".md",
-		rep, rep.Candidates, rep.Coverage, run); err != nil {
+	if err := lumen.WriteMarkdownDiff(strings.TrimSuffix(base, ".json")+".md",
+		rep, rep.Candidates, rep.Coverage, run, dres); err != nil {
 		fmt.Fprintln(os.Stderr, "gagal menulis markdown:", err)
 	}
 	if opts.writeSARIF {
@@ -63,6 +99,7 @@ type plainOpts struct {
 	noDNSFix   bool
 	compact    bool
 	quiet      bool
+	withDiff   bool
 }
 
 // scanTarget memetakan satu target.
@@ -347,4 +384,11 @@ func normaliseTarget(s string) string {
 		return "https://" + s
 	}
 	return s
+}
+
+func minInt2(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

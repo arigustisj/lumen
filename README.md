@@ -326,3 +326,64 @@ Yang membuatnya berguna untuk agent:
   ada blok `SCAN GAGAL` yang menyatakan hasilnya tidak boleh dibaca sebagai
   "situs ini bersih".
 - **Setiap kandidat punya langkah verifikasi**, bukan hanya nama kategori.
+
+## Diff antar scan
+
+```
+lumen -target https://app.example.com -diff
+```
+
+Membandingkan scan ini dengan scan sebelumnya untuk target yang sama:
+
+```
+  PERUBAHAN SEJAK 2026-10-01 15:04
+
+  +2 high   +1 medium
+
+  TEMUAN BARU  2
+    ▲ Endpoint admin terbuka
+    ▲ Kredensial di dalam JS bundle
+
+  ENDPOINT BARU  3
+    + GET  /api/admin/users
+    + POST /api/admin/reset
+```
+
+Baseline diambil dari scan sebelumnya untuk **target yang sama**, bukan run
+terakhir secara global — membandingkan antar target tidak punya arti.
+
+### Yang paling penting: ini bukan "perbaikan"
+
+Endpoint yang hilang belum tentu dihapus. Kalau scan yang barunya tidak
+tuntas, atau menjangkau lebih sedikit halaman, endpoint itu masih ada di
+server — cuma tidak terlihat di scan. Laporan yang salah baca ini jauh lebih
+berbahaya daripada tidak melaporkan apa-apa.
+
+Jadi kalau cakupannya tidak sebanding, lumen:]menyatakan itu eksplisit dan
+mengubah labelnya:
+
+| kondisi | label |
+|---|---|
+| scan comparable | `ENDPOINT HILANG`, `TEMUAN HILANG` |
+| scan tidak comparable | `ENDPOINT TIDAK TERLIHAT`, `TEMUAN TIDAK MUNCUL LAGI` |
+
+Pemicunya:
+
+- scan baru gagal mengambil halaman awal
+- halaman turun lebih dari 30% dibanding scan lama
+- tidak ada scan sebelumnya sama sekali
+- scan lama juga gagal, jadi tidak bisa dipakai sebagai baseline
+
+### Untuk agent AI
+
+`-diff` juga menambah bagian `## Perubahan sejak ...` di laporan `.md`,
+tepat setelah frontmatter dan sebelum daftar temuan — supaya agent dengan
+tugas "apa yang berubah sejak kemarin" tidak perlu menggulir seluruh laporan.
+
+Frontmatter ikut membawa:
+
+```yaml
+diff_since: 2026-10-01 15:04
+diff_new_findings: 2
+diff_new_endpoints: 3
+```
