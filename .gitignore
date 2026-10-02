@@ -9,4 +9,3 @@ dist/
 # config yang berisi token
 lumen.yaml
 *.local.yaml
-*.md
