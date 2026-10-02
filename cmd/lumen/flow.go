@@ -164,16 +164,35 @@ func scanTarget(j job, opts plainOpts) (*lumen.Report, []lumen.AuthzReport) {
 func runAuthzFor(ctx context.Context, j job, eps []lumen.Endpoint, opts plainOpts) *lumen.AuthzReport {
 	tg := lumen.Target{Name: j.name, URL: j.url, Authz: true, Tokens: j.toks}
 	names := tg.TokenNames()
-	if len(names) < 2 {
-		fmt.Fprintln(os.Stderr, "authz butuh minimal dua perspektif — dilewati")
+	if len(names) == 0 {
 		return nil
 	}
+
+	// Satu perspektif pun sudah cukup untuk membuktikan eksposur anonim.
+	//
+	// Dulu guard di sini mewajibkan dua perspektif, dengan alasan yang
+	// benar untuk BOLA tapi keliru untuk hal yang lebih dasar: kalau
+	// permintaan tanpa token apa pun mengembalikan 200 beserta data, itu
+	// bukan kandidat — itu terbukti bocor, dan tidak butuh akun kedua
+	// untuk membuktikannya.
+	//
+	// Yang tidak bisa dilakukan tanpa dua akun: membedakan "data ini
+	// memang publik" dari "ownership tidak dicek". Itu batasnya, dan
+	// laporan mengatakannya.
+	compare := names[1:]
+	if len(names) == 1 && names[0] == "anon" {
+		compare = nil
+	} else if len(names) == 1 {
+		compare = nil
+	}
+
 	ar, err := lumen.RunAuthz(ctx, tg.HTTPClient(), tg, eps,
-		lumen.AuthzOptions{Baseline: "anon", Compare: names[1:], DelayMS: int(opts.delay.Milliseconds())})
+		lumen.AuthzOptions{Baseline: "anon", Compare: compare, DelayMS: int(opts.delay.Milliseconds())})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "authz:", err)
 		return nil
 	}
+	ar.AnonOnly = len(compare) == 0
 	return &ar
 }
 

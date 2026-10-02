@@ -212,13 +212,17 @@ targets:
 
 // TestConfigDitolakKalauTidakBisaMembuktikan — konfigurasi yang tidak bisa
 // menghasilkan kesimpulan harus ditolak saat load.
+//
+// Catatan: authz dengan perspektif anon saja TIDAK termasuk di daftar ini.
+// Itu konfigurasi yang sah — tanpa login, respons 2xx dari endpoint sensitif
+// sudah membuktikan eksposur. Yang ditolak adalah konfigurasi tanpa
+// perspektif yang bisa dipakai sama sekali.
 func TestConfigDitolakKalauTidakBisaBProve(t *testing.T) {
 	bad := []string{
 		"",                        // kosong
 		"targets: []\n",           // tanpa target
 		"targets:\n  - name: a\n", // tanpa url
-		"targets:\n  - name: a\n    url: https://x\n    authz: true\n", // authz tanpa token
-		"targets:\n  - name: a\n      url: https://x\n",                // indentasi meleset
+		"targets:\n  - name: a\n      url: https://x\n", // indentasi meleset
 	}
 	for i, src := range bad {
 		if _, err := ParseConfig(src); err == nil {

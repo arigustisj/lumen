@@ -51,6 +51,15 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage, compact bool, au
 	// Di layar sempit, baris tagline dipindah ke footer: menambah satu
 	// baris penuh di atas sebelum konten dimulai terasa boros, dan itu
 	// itu yang bikin output "kepanjangan" di HP.
+	// Tingkat bukti ditulis paling dekat dengan header. Placement-nya bukan
+	// urusan estetika: ini yang paling sering salah dibaca pembaca. "0 temuan"
+	// tanpa keterangan akan disimpulkan "aman", padahal bisa berarti tidak
+	// sempat diperiksa.
+	proof := BuildProof(&r)
+	head2 := fmt.Sprintf("%s   %s", s.Dim("bukti"), proofLine(proof, s))
+	b.WriteString("  " + head2 + "\n")
+	b.WriteString("\n")
+
 	brand := s.Bold(s.Cyan(Name)) + s.Gray(" "+Version)
 	head := brand
 	if t := strings.TrimPrefix(r.Target, "https://"); len([]rune(brand))+len([]rune(t))+3 <= s.Width {
@@ -452,4 +461,23 @@ func truncMid(s string, n int) string {
 	}
 	half := (n - 1) / 2
 	return string(r[:half]) + "…" + string(r[len(r)-half:])
+}
+
+// proofLine merender tingkat bukti dengan warna yang berbeda per tingkat.
+//
+// Warnanya bukan hiasan: "terbukti" dan "kandidat" harus terpisah secara
+// visual, karena keduanya sering muncul berdampingan dalam laporan yang sama
+// dan tidak boleh dibaca sebagai kategori yang sama.
+func proofLine(p Proof, s Style) string {
+	var parts []string
+	if p.Proven > 0 {
+		parts = append(parts, s.Red(fmt.Sprintf("%d terbukti", p.Proven)))
+	} else {
+		parts = append(parts, s.Dim("0 terbukti"))
+	}
+	parts = append(parts, s.Yellow(fmt.Sprintf("%d kandidat", p.Candidate)))
+	if p.Untested > 0 {
+		parts = append(parts, s.Dim(fmt.Sprintf("%d tidak diuji", p.Untested)))
+	}
+	return strings.Join(parts, "  ")
 }

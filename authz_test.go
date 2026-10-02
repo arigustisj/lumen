@@ -27,8 +27,10 @@ func authzTarget(t *testing.T, h http.Handler) (Target, *httptest.Server) {
 
 func runAuthz(t *testing.T, target Target, eps []Endpoint) AuthzReport {
 	t.Helper()
+	// Probe shell dimatikan di sini supaya test bisa menghitung request dengan
+	// tepat. Ada test terpisah yang khusus menguji deteksi shell.
 	rep, err := RunAuthz(context.Background(), target.HTTPClient(), target,
-		eps, AuthzOptions{Baseline: "anon", Compare: []string{"as_user_a", "as_user_b"}})
+		eps, AuthzOptions{Baseline: "anon", Compare: []string{"as_user_a", "as_user_b"}, NoShellProbe: true})
 	if err != nil {
 		t.Fatalf("RunAuthz: %v", err)
 	}
@@ -179,7 +181,8 @@ func TestAuthzHanyaGET(t *testing.T) {
 		{Path: "/api/e", Method: "PUT"},
 	})
 	// Setiap endpoint dipanggil sekali per perspektif (anon + 2 akun), dan
-	// hanya untuk endpoint GET.
+	// hanya untuk endpoint GET. Probe halaman root dimatikan supaya tidak
+	// menambah hitungan — ia bukan bagian dari endpoint yang diuji.
 	for _, c := range called {
 		if c != "GET /api/a" {
 			t.Errorf("endpoint non-GET dipanggil: %s", c)
@@ -249,9 +252,16 @@ func TestAuthzHeaderUntukPerspektifAnonHarusKosong(t *testing.T) {
 
 // TestAuthzConfigButuhDuaPerspektif — konfigurasi yang tidak bisa
 // menghasilkan kesimpulan harus ditolak saat load, bukan diam-diam jalan.
+//
+// Anon-tunggal BOLEH: tanpa login,Retrieve 200 dari endpoint sensitif sudah
+// membuktikan eksposur, dan itu tidak butuh kredensial. Yang tetap ditolak
+// adalah konfigurasi tanpa perspektif sama sekali.
 func TestAuthzConfigButuhDuaPerspektif(t *testing.T) {
-	if _, err := ParseConfig("targets:\n  - name: a\n    url: https://x.test\n    authz: true\n"); err == nil {
-		t.Fatal("authz tanpa token harus ditolak")
+	if _, err := ParseConfig("targets:\n  - name: a\n    url: https://x.test\n    authz: true\n    tokens:\n      anon: \"\"\n"); err != nil {
+		t.Fatalf("anon-tunggal harus boleh: %v", err)
+	}
+	if _, err := ParseConfig("targets:\n  - name: a\n    url: https://x.test\n    authz: true\n    tokens:\n      - broken\n"); err == nil {
+		t.Fatal("authz tanpa perspektif yang bisa dipakai harus ditolak")
 	}
 	if _, err := ParseConfig("targets:\n  - name: a\n    url: https://x.test\n"); err != nil {
 		t.Fatalf("config tanpa authz harus boleh: %v", err)

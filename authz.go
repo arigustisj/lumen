@@ -44,6 +44,12 @@ type View struct {
 	Error       string
 	Redirect    string
 	ElapsedMS   int64
+	// ContentType dipakai untuk membedakan halaman HTML generik dari
+	// respons API. Tanpa ini, endpoint JSON yang kebetulan isomorphic
+	// dengan root akan salah dikira shell SPA.
+	ContentType string
+	// LooksHTML menandai body yang jelas halaman HTML.
+	LooksHTML bool
 }
 
 // sameBody membandingkan dua tampilan.
@@ -76,15 +82,34 @@ type AuthzReport struct {
 	Given    int
 	Tested   int
 	Skipped  int
+
+	// ShellHash adalah hash respons untuk "/". Body endpoint yang identik
+	// dengannya dianggap halaman SPA generik, bukan data yang bocor.
+	ShellHash   string `json:"shell_hash,omitempty"`
+	ShellLength int    `json:"shell_length,omitempty"`
+
+	// AnonOnly benar kalau hanya perspektif anonim yang diuji. Laporan
+	// wajib menyatakan batas kesimpulan yang mengikuti darinya: tanpa dua
+	// akun sah, "terbuka untuk anonim" bisa dibuktikan, tetapi "ownership
+	// tidak dicek" tidak.
+	AnonOnly bool `json:"anon_only,omitempty"`
+
+	// ShellCount menghitung endpoint yang mengembalikan halaman SPA generik.
+	// Ini bukan temuan, tapi harus ikut dilaporkan: jadi jumlah "terbuka"
+	// yang sebenarnya cuma halaman HTML publik.
+	ShellCount int `json:"shell_count,omitempty"`
 }
 
 // AuthzOptions mengatur pemeriksaan.
 type AuthzOptions struct {
-	Baseline  string
-	Compare   []string
-	DelayMS   int
-	SkipPaths []string
-	OnlyPaths []string
+	// NoShellProbe mematikan pengambilan halaman root untuk menandai shell
+	// SPA. Needed oleh test yang menghitung jumlah request.
+	NoShellProbe bool
+	Baseline     string
+	Compare      []string
+	DelayMS      int
+	SkipPaths    []string
+	OnlyPaths    []string
 }
 
 // RunAuthz menguji endpoint milik satu target.
@@ -120,6 +145,23 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 	sort.Strings(paths)
 
 	order := append([]string{rep.Baseline}, opts.Compare...)
+
+	// Hash halaman root jadi penanda "shell SPA".
+	//
+	// SPA modern hampir selalu mengembalikan index.html yang sama untuk
+	// semua rute yang tidak dikenal, lalu merender halaman di sisi klien.
+	// Tanpa penanda ini, setiap rute akan terlihat "terbuka untuk anonim"
+	// padahal yang bocor cuma file HTML publik — dan laporan jadi seluruhnya
+	// palsu, yang lebih buruk daripada tidak melaporkan apa pun.
+	// Pyaratnya diperiksa sebelum fetch, bukan sesudahnya — dalam Go,
+	// fetchView akan dipanggil wszystkie, apa pun nilai syaratnya.
+	if !opts.NoShellProbe {
+		if root := fetchView(ctx, client, target, "/", rep.Baseline); root.Hash != "" && root.Error == "" {
+			rep.ShellHash = root.Hash
+			rep.ShellLength = root.Length
+		}
+	}
+
 	for _, p := range paths {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -136,7 +178,10 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 			}
 		}
 		rep.Tested++
-		judge(&res, rep.Baseline)
+		judge(&res, rep.Baseline, rep.ShellHash)
+		if res.Verdict == "shell-spa" {
+			rep.ShellCount++
+		}
 		rep.Results = append(rep.Results, res)
 	}
 	return rep, nil
@@ -154,13 +199,31 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 // Yang tidak dilakukan: menyimpulkan "aman" dari respons yang sama. Respons
 // identik bisa berarti datanya memang publik, dan itu tidak bisa dibedakan
 // dari kelalaian tanpa knowing endpoint-nya.
-func judge(r *AuthzResult, baseline string) {
+func judge(r *AuthzResult, baseline, shell string) {
 	base, ok := r.Views[baseline]
 	if !ok {
 		r.Verdict = "tidak-ada-baseline"
 		return
 	}
 	anon := r.Views["anon"]
+
+	// 0. Body-nya cuma shell SPA.
+	//
+	// Dicek lebih dulu dari apa pun, karena tanpa ini setiap rute yang tidak
+	// dikenal akan dilaporkan terbuka. Body yang identik dengan halaman root
+	// berarti tidak ada data yang bocor — yang kembali hanyalah index.html
+	// yang memang publik.
+	// Syaratnya sengaja berlapis. Hash yang sama saja tidak cukup: sebuah
+	// endpoint API bisa saja mengembalikan body yang sama persis dengan root
+	// tanpa menjadi bocor, dan lebih pengetahuan, sebuah endpoint yang
+	// benar-benar bocor bisa saja bernama sama. Yang membedakan bukan
+	// kesamaan byte, tapi jenis dokumen yang dikembalikan.
+	if shell != "" && anon.Hash != "" && anon.Hash == shell &&
+		anon.Status >= 200 && anon.Status < 300 && anon.LooksHTML {
+		r.Verdict = "shell-spa"
+		r.Why = "respons identik dengan halaman root — halaman SPA generik, bukan data yang bocor"
+		return
+	}
 
 	// 1. Anonim masuk ke endpoint sensitif.
 	if anon.Status >= 200 && anon.Status < 300 && r.Sensitive {
@@ -226,7 +289,7 @@ func distinctBodies(views map[string]View, keys []string) bool {
 // Detail dirangkai dari template per kelas supaya setiap baris punya
 // penyebab, cara verifikasi, dan arah perbaikan — bukan cuma nama aturan.
 func FindingFromAuthz(r AuthzResult) *Finding {
-	if r.Verdict == "" || r.Verdict == "seimbang" || r.Verdict == "tidak-ada-baseline" {
+	if r.Verdict == "" || r.Verdict == "seimbang" || r.Verdict == "tidak-ada-baseline" || r.Verdict == "shell-spa" {
 		return nil
 	}
 	sev := SevLow
@@ -294,6 +357,8 @@ func fetchView(ctx context.Context, client *http.Client, target Target, path, pe
 		return v
 	}
 	defer resp.Body.Close()
+	v.ContentType = resp.Header.Get("Content-Type")
+	v.LooksHTML = isHTMLResponse(v.ContentType)
 
 	v.Status = resp.StatusCode
 	if loc := resp.Header.Get("Location"); loc != "" {
@@ -501,4 +566,17 @@ func sortedViewKeys(m map[string]View) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// isHTMLResponse menandai respons yang isinya halaman HTML.
+//
+// application/json, teks, dan apa pun yang bukan HTML tidak pernah dianggap
+// "shell SPA" — endpoint API yang mengembalikan JSON adalah kandidat eksposur
+// yang layak dilaporkan, sinto merekaEq tidak.
+func isHTMLResponse(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	return ct == "text/html" || ct == "application/xhtml+xml"
 }

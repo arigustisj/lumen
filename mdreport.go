@@ -3,6 +3,7 @@ package lumen
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,6 +62,10 @@ func writeFrontmatter(b *strings.Builder, rep *Report, d *DiffResults) {
 	w("target: %s", rep.Target)
 	w("scanned_at: %s", rep.GeneratedAt.UTC().Format(time.RFC3339))
 	w("verdict: %s", markdownVerdict(rep))
+	pf := BuildProof(rep)
+	w("evidence_proven: %d", pf.Proven)
+	w("evidence_candidate: %d", pf.Candidate)
+	w("evidence_untested: %d", pf.Untested)
 	if d != nil {
 		w("diff_since: %s", d.OldAt)
 		w("diff_new_findings: %d", len(d.NewFindings))
@@ -290,8 +295,13 @@ func writeAuthzSection(b *strings.Builder, ar AuthzReport) {
 	}
 	w("")
 
+	shellPaths := []string{}
 	for _, r := range ar.Results {
 		if r.Verdict == "seimbang" || r.Verdict == "" {
+			continue
+		}
+		if r.Verdict == "shell-spa" {
+			shellPaths = append(shellPaths, r.Path)
 			continue
 		}
 		w("### %s — `%s`", r.Verdict, r.Path)
@@ -314,6 +324,7 @@ func writeAuthzSection(b *strings.Builder, ar AuthzReport) {
 			w("")
 		}
 	}
+	writeShellNote(b, shellPaths)
 }
 
 func countSeverity(fs []Finding, s Severity) int {
@@ -447,4 +458,26 @@ func findingTitle(f Finding) string {
 func mdEscape(s string) string {
 	r := strings.NewReplacer("|", "\\|", "\n", " ")
 	return r.Replace(s)
+}
+
+// writeShellNote meringkas endpoint yang hanya mengembalikan halaman SPA.
+//
+// Sengaja bukan satu heading per endpoint: sepuluh rute yang mengembalikan
+// index.html yang sama adalah SATU fakta, bukan sepuluh temuan. Menuliskannya
+// sebagai sepuluh bagian membuat noise yang READING-nya dominate urutan
+// ROL menemukan masalah yang sebenarnya.
+func writeShellNote(b *strings.Builder, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	b.WriteString("### Diabaikan: halaman SPA generik (" + strconv.Itoa(len(paths)) + ")\n\n")
+	b.WriteString("Rute berikut mengembalikan respons yang identik dengan halaman root, ")
+	b.WriteString("jadi hanya `index.html` yang publik — bukan data yang bocor. ")
+	b.WriteString("SPA merender halaman di sisi klien, jadi status 200 di sini tidak berarti endpoint-nya terbuka.\n\n")
+	if len(paths) <= 12 {
+		b.WriteString("`" + strings.Join(paths, "` `") + "`\n\n")
+	} else {
+		b.WriteString("`" + strings.Join(paths[:12], "` `") + "` dan " +
+			strconv.Itoa(len(paths)-12) + " lainnya\n\n")
+	}
 }

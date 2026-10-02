@@ -427,3 +427,41 @@ Untuk laporan yang juga bisa dibuka dari riwayat, panel memakai
 `DiffAgainstPrevious` yang mencari posisi laporan itu di riwayat, lalu
 membandingkannya dengan run berikutnya — supaya "terakhir" dan "sebelumnya"
 tidak tertukar.
+
+## Tingkat bukti
+
+Laporan selalu memisahkan tiga hal yang **tidak boleh dicampur**:
+
+| tingkat | artinya |
+|---|---|
+| `terbukti` | ada respons nyata yang membuktikannya |
+| `kandidat` | hanya sinyal statis — belum dikonfirmasi |
+| `tidak diuji` | tidak diperiksa, jadi **tidak bisa disimpulkan aman** |
+
+`lumen` tidak pernah menaikkan kandidat menjadi temuan kecuali ada request yang
+benar-benar dikirim dan jawabannya membuktikan sesuatu.
+
+### Mode anonim
+
+```yaml
+targets:
+  - name: situs-lu
+    url: https://staging.example.com
+    authz: true
+    tokens:
+      anon: ""
+```
+
+Tidak butuh kredensial apa pun. Cukup membuktikan ada respons `2xx` pada
+endpoint sensitif **tanpa login**. Yang tidak bisa dibuktikan tanpa dua akun:
+membedakan "ownership tidak dicek" dari "data ini memang publik".
+
+### Heuristik shell SPA
+
+SPA hampir selalu mengembalikan `index.html` yang sama untuk semua rute yang
+tidak dikenal. Tanpa penanganan ini, tiap rute dilaporkan terbuka padahal yang
+"bocor" cuma file HTML publik — dan seluruh laporan jadi palsu, yang lebih
+berbahaya daripada tidak melaporkan apa pun.
+
+Deteksi memakai tiga syarat: hash body identik dengan halaman root, status
+`2xx`, dan `Content-Type` HTML. Endpoint JSON tidak pernah dianggap shell.

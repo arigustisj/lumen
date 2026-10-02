@@ -201,8 +201,16 @@ func ParseConfig(src string) (Config, error) {
 				}
 				t.Tokens["anon"] = ""
 			}
-			if len(t.Tokens) < 2 {
-				return c, fmt.Errorf("%s: authz butuh minimal 2 perspektif (mis. anon + satu akun test), baru ada yang bisa dibandingkan", path)
+			// Satu perspektif cukup untuk membuktikan eksposur anonim, dan
+			// itu tidak butuh kredensial apa pun.
+			//
+			// Dua akun baru dibutuhkan untuk hal yang lebih halus:
+			// membedakan "ownership tidak dicek" dari "data ini memang
+			// publik". Menolak konfigurasi anonim-tunggal membuat orang
+			// mengira tidak ada yang bisa dicek sama sekali, padahal
+			// pemeriksaan paling mendasar sudah bisa jalan tanpa login.
+			if len(t.Tokens) == 0 {
+				return c, fmt.Errorf("%s: authz butuh minimal perspektif anon", path)
 			}
 		}
 		c.Targets = append(c.Targets, t)
