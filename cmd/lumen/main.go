@@ -52,6 +52,7 @@ func main() {
 		sarif       = flag.Bool("sarif", true, "tulis SARIF 2.1.0 untuk GitHub code scanning")
 		markdown    = flag.Bool("markdown", true, "tulis laporan .md untuk agent AI")
 		quiet       = flag.Bool("quiet", false, "tanpa ringkasan di layar")
+		bolaFlag    = flag.Bool("bola", true, "uji ownership substitution (butuh 2 akun sah)")
 		versionFlag = flag.Bool("version", false, "tampilkan versi lalu keluar")
 		noCol       = flag.Bool("no-color", false, "matikan warna (default: autodeteksi terminal)")
 		asciiOnly   = flag.Bool("ascii", false, "karakter ASCII, bukan unicode")
@@ -88,7 +89,7 @@ func main() {
 		fatal("config: %v", err)
 	}
 
-	jobs, extraAuthz := resolveJobs(cfg, target, name, runAuthz)
+	jobs, extraAuthz := resolveJobs(cfg, target, name, runAuthz, bolaFlag)
 	if len(jobs) == 0 && !interactive(*noTUI) {
 		flag.Usage()
 		os.Exit(2)
@@ -105,6 +106,7 @@ func main() {
 			// perlu mengetik ulang.
 			j := jobs[0]
 			j.authz = j.authz || extraAuthz
+			j.bola = j.bola || (*bolaFlag && extraAuthz)
 			sh.pending = &j
 		}
 		if _, err := tea.NewProgram(sh, tea.WithAltScreen()).Run(); err != nil {
@@ -183,17 +185,17 @@ func loadConfigInto(opts *plainOpts, path string) (lumen.Config, error) {
 }
 
 // resolveJobs menyusun daftar target dari config dan flag.
-func resolveJobs(cfg lumen.Config, target, name *string, authz *bool) ([]job, bool) {
+func resolveJobs(cfg lumen.Config, target, name *string, authz, bola *bool) ([]job, bool) {
 	var out []job
 	extra := *authz
 	for _, t := range cfg.Targets {
 		if t.Authz && !extra {
 			continue
 		}
-		out = append(out, job{name: t.Name, url: t.URL, authz: t.Authz, toks: t.Tokens})
+		out = append(out, job{name: t.Name, url: t.URL, authz: t.Authz, bola: *bola, toks: t.Tokens})
 	}
 	if *target != "" {
-		j := job{url: *target, name: *name}
+		j := job{url: *target, name: *name, bola: *bola}
 		if j.name == "" {
 			j.name = hostOf(*target)
 		}
@@ -213,7 +215,9 @@ type job struct {
 	name  string
 	url   string
 	authz bool
-	toks  lumen.Tokens
+	// bola menjalankan ownership substitution. Butuh minimal dua akun sah.
+	bola bool
+	toks lumen.Tokens
 }
 
 // applyProbe menjalankan verifikasi OPTIONS lalu menggabungkan hasilnya ke

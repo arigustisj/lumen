@@ -215,7 +215,7 @@ func judge(r *AuthzResult, baseline, shell string) {
 	// yang memang publik.
 	// Syaratnya sengaja berlapis. Hash yang sama saja tidak cukup: sebuah
 	// endpoint API bisa saja mengembalikan body yang sama persis dengan root
-	// tanpa menjadi bocor, dan lebih pengetahuan, sebuah endpoint yang
+	// tanpa menjadi bocor, dan lebih tidak, sebuah endpoint yang
 	// benar-benar bocor bisa saja bernama sama. Yang membedakan bukan
 	// kesamaan byte, tapi jenis dokumen yang dikembalikan.
 	if shell != "" && anon.Hash != "" && anon.Hash == shell &&
@@ -240,7 +240,7 @@ func judge(r *AuthzResult, baseline, shell string) {
 		v := r.Views[pers]
 		// Hanya berlaku pada respons sukses. Dua perspektif yang sama-sama
 		// dapat 404 atau 500 bukan berarti otorisasi tidak bekerja — itu
-		// berarti request-nya salah, dan oversaw itu akan-reported
+		// berarti request-nya salah, dan mengabaikannya akan dilaporkan
 		// sebagai temuan palsu.
 		if v.sameBody(base) && base.Status >= 200 && base.Status < 300 {
 			r.Verdict = "auth-tidak-aktif"

@@ -67,6 +67,9 @@ func runPlain(j job, opts plainOpts) int {
 		rep, rep.Candidates, rep.Coverage, run, dres); err != nil {
 		fmt.Fprintln(os.Stderr, "gagal menulis markdown:", err)
 	}
+	// Ownership substitution hanya mungkin kalau ada minimal dua akun sah.
+	// Menjalankannya tanpa itu hanya menghasilkan permintaan sia-sia ke
+	// server, jadi dinyalakan lewat flag terpisah yang jelas.
 	if opts.writeSARIF {
 		if err := lumen.WriteSARIF(strings.TrimSuffix(base, ".json")+".sarif",
 			lumen.BuildSARIF(*rep, rep.Candidates, rep.Coverage,
@@ -158,6 +161,12 @@ func scanTarget(j job, opts plainOpts) (*lumen.Report, []lumen.AuthzReport) {
 			authz = append(authz, *ar)
 		}
 	}
+
+	// Ownership substitution memakai endpoint dari scan yang baru selesai,
+	// jadi ia tidak menjalankan crawler kedua.
+	if j.bola && j.authz {
+		rep.BOLA = runBolaFor(ctx, j, eps, opts)
+	}
 	return rep, authz
 }
 
@@ -194,6 +203,51 @@ func runAuthzFor(ctx context.Context, j job, eps []lumen.Endpoint, opts plainOpt
 	}
 	ar.AnonOnly = len(compare) == 0
 	return &ar
+}
+
+// runBolaFor menjalankan ownership substitution.
+//
+// Hanya dijalankan kalau ada minimal dua akun sah. Tanpa itu, tidak ada yang
+// bisa dibuktikan: tidak ada "pemilik" untuk diambil ID-nya dan tidak ada
+// "orang lain" untuk dicoba.
+//
+// Urutannya penting. Verdict lama "bola-dicurigai" hanya induksi dari "isi
+// berbeda". Uji di sini menggantikan induksi itu dengan bukti langsung:
+// ID diambil dari daftar milik pemilik, lalu dibuka dengan kredensial orang
+// lain.
+func runBolaFor(ctx context.Context, j job, eps []lumen.Endpoint, opts plainOpts) *lumen.OwnerReport {
+	tg := lumen.Target{Name: j.name, URL: j.url, Authz: true, Tokens: j.toks}
+	names := tg.TokenNames()
+	var sah []string
+	for _, n := range names {
+		if n != "anon" {
+			sah = append(sah, n)
+		}
+	}
+	if len(sah) < 2 {
+		fmt.Fprintln(os.Stderr, "bola: butuh minimal dua akun sah (anon tidak dihitung) — dilewati")
+		return nil
+	}
+
+	out := &lumen.OwnerReport{}
+	// Setiap pasangan diuji. Dengan tiga akun, tiga pasangan diperiksa; hanya
+	// dua yang benar-benar relevan tapi tiga lebih murah daripada menebak
+	// pasangan mana yang salah konfigurasi.
+	for i := 0; i < len(sah); i++ {
+		for k := i + 1; k < len(sah); k++ {
+			rep := lumen.ProbeOwnership(ctx, tg.HTTPClient(), tg, eps, sah[i], sah[k],
+				opts.delay)
+			out.Target = rep.Target
+			out.Pairs = append(out.Pairs, rep.Pairs...)
+			out.ListsUsed = append(out.ListsUsed, rep.ListsUsed...)
+			out.Swaps = append(out.Swaps, rep.Swaps...)
+			out.Proven += rep.Proven
+			out.Guarded += rep.Guarded
+			out.Unreadable += rep.Unreadable
+			out.Coverage = rep.Coverage
+		}
+	}
+	return out
 }
 
 func failedReport(j job, msg string, start time.Time) *lumen.Report {
@@ -321,6 +375,9 @@ func (s *shell) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.pending = nil
 		s.home.Reload()
 		rep, authz := msg.rep, msg.authz
+		if msg.bola != nil && rep != nil {
+			rep.BOLA = msg.bola
+		}
 		run, err := s.store.SaveRun(rep, msg.at)
 		if err != nil {
 			s.home.SetStatus("gagal menyimpan: " + err.Error())
@@ -360,6 +417,7 @@ func doneMsgOrFail(m tea.Msg) string {
 type doneMsg struct {
 	rep   *lumen.Report
 	authz []lumen.AuthzReport
+	bola  *lumen.OwnerReport
 	at    time.Time
 }
 
@@ -377,7 +435,15 @@ func (s *shell) runCmd(j job) tea.Cmd {
 		if rep.RootError == "" && len(rep.Pages) == 0 {
 			return failMsg{err: fmt.Errorf("tidak ada halaman yang bisa diambil")}
 		}
-		return doneMsg{rep: rep, authz: authz, at: time.Now()}
+
+		// Ownership substitution butuh daftar endpoint, jadi ia membaca
+		// ulang dari laporan yang baru selesai — bukan menjalankan crawler
+		// kedua.
+		var bola *lumen.OwnerReport
+		if j.bola && j.authz {
+			bola = runBolaFor(context.Background(), j, rep.Endpoints, opts)
+		}
+		return doneMsg{rep: rep, authz: authz, bola: bola, at: time.Now()}
 	}
 }
 

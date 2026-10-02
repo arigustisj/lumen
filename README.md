@@ -465,3 +465,37 @@ berbahaya daripada tidak melaporkan apa pun.
 
 Deteksi memakai tiga syarat: hash body identik dengan halaman root, status
 `2xx`, dan `Content-Type` HTML. Endpoint JSON tidak pernah dianggap shell.
+
+## Bukti BOLA (ownership substitution)
+
+"bola-dicurigai" tidak dapat dibantah: data berbeda antar-user adalah hal yang
+wajar pada endpoint publik. Bukti yang sebenarnya tidak memerlukan tebakan:
+
+1. Masuk sebagai akun **pemilik**, buka endpoint daftarnya.
+2. Kumpulkan ID objek yang benar-benar milik dia.
+3. Request ID itu memakai token **akun lain**.
+
+Kalau langkah 3 mengembalikan `200` dengan body yang sama persis dengan yang
+dihat pemiliknya, kebocorannya **terbukti**. Kalau `403` atau `404`, guard-nya
+bekerja.
+
+Butuh minimal dua akun sah (anon tidak dihitung):
+
+```yaml
+targets:
+  - name: situs-lu
+    url: https://staging.example.com
+    authz: true
+    tokens:
+      anon: ""
+      alice: "..."
+      bob: "..."
+```
+
+```bash
+lumen -config lumen.yaml -authz -bola=false   # matikan
+```
+
+**Yang tidak diperiksa:** objek di luar daftar, endpoint tanpa daftar pembuka,
+dan akun yang tidak punya akun uji. Laporan menyatakan ini di bagian cakupan.
+Gagal menemukan BOLA berarti "tidak terbukti pada cakupan ini", bukan "aman".

@@ -13,7 +13,7 @@ const (
 	Name    = "lumen"
 	Tagline = "pemeta permukaan aplikasi web"
 	Author  = "0xlzy"
-	Version = "0.6.0"
+	Version = "0.7.0"
 )
 
 // Banner mengembalikan satu baris identitas, mis. "lumen 0.3.1 — pemeta
@@ -112,4 +112,10 @@ type Report struct {
 	// Authz menyimpan hasil perbandingan akses. Hanya ada kalau pemeriksaan
 	// diferensial dijalankan.
 	Authz *AuthzReport `json:"authz,omitempty"`
+
+	// BOLA menyimpan hasil ownership substitution — bukti langsung bahwa
+	// akun non-pemilik bisa membaca objek milik orang lain. Berbeda dengan
+	// authz, field ini tidak pernah berisi dugaan: setiap entri di dalamnya
+	// disertai respons nyata dari server.
+	BOLA *OwnerReport `json:"bola,omitempty"`
 }
