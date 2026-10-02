@@ -200,7 +200,7 @@ func BuildSARIF(r Report, cands []Candidate, cov Coverage, exitCode int) *SarifL
 		Tool: SarifTool{Driver: SarifDriver{
 			Name:           Name,
 			Version:        Version,
-			InformationURI: "https://github.com/0xlzy-sam/lumen",
+			InformationURI: "https://github.com/arigustisj/lumen",
 			Rules:          rules,
 		}},
 		Results: results,

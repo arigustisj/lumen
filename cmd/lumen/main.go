@@ -18,7 +18,7 @@
 package main
 
 import (
-	lumen "github.com/0xlzy-sam/lumen"
+	lumen "github.com/arigustisj/lumen"
 
 	"context"
 	"flag"

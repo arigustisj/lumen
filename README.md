@@ -114,7 +114,7 @@ di bagian yang paling penting. Warna dan unicode otomatis menyesuaikan —
 Satu package di root, supaya bisa di-import oleh project lain:
 
 ```
-go.mod            module github.com/0xlzy-sam/lumen
+go.mod            module github.com/arigustisj/lumen
 scope.go          guard host + rate limiter
 extract.go        parser HTML & JS — inti nilai alat ini
 mapper.go         orkestrasi crawl
@@ -130,7 +130,7 @@ cmd/lumen/        CLI tipis
 Dipakai sebagai library:
 
 ```go
-import "github.com/0xlzy-sam/lumen"
+import "github.com/arigustisj/lumen"
 
 m := lumen.NewMapper(lumen.MapperConfig{Target: u, Conc: 4})
 m.Run(ctx)
