@@ -30,21 +30,33 @@ run: build ## scan target: make run TARGET=https://app.example.com
 	$(BIN) -target $(TARGET) $(ARGS)
 
 # ── Termux (Android) ───────────────────────────────────────────────────────
-# Termux menjalankan binary Linux native. Binary Linux/amd64 dari WSL tidak
-# bisa dipakai — arsitekturnya beda, dan Android tidak punya pustaka sistem
-# yang sama. aarch64 adalah hampir semua phone sekarang.
+# Termux menjalankan binary Linux native, jadi binary linux/amd64 dari WSL
+# tidak bisa dipakai.
 #
-# CGO_ENABLED=0 wajib: binary harus benar-benar statis, tidak menarik pustaka
-# dari device. Kalau tidak, errornya muncul di HP dengan pesan yang tidak
-# daripada kerjakan sekarang.
-# daripada kerjakan sekarang.
-termux: ## binary untuk Termux di Android (aarch64, statis)
+# TAPI GOOS=linux juga tidak bisa. Android sejak API 21 mewajibkan
+# executable berbentuk PIE (ET_DYN); binary GOOS=linux dibangun sebagai
+# static ET_EXEC dan ditolak linker Android dengan:
+#
+#     error: "..." has unexpected e_type: 2
+#
+# e_type 2 = ET_EXEC. Build dengan GOOS=android menghasilkan PIE dengan
+# PT_INTERP /system/bin/linker64, yang memang linker milik Android — inilah
+# yang dipakai Termux. Tidak ada entry NEEDED, jadi binary-nya self-contained
+# dan tidak butuh pustaka dari device.
+termux: ## binary untuk Termux di Android (arm64 PIE)
 	@mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-		go build -trimpath -ldflags "$(LDFLAGS)" -o dist/lumen-termux $(PKG)
+	CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
+		go build -trimpath -ldflags "-s -w" -o dist/lumen-termux $(PKG)
 	@echo "== binary =="; file dist/lumen-termux
-	@echo "== dynamic deps (harus kosong) =="
-	@readelf -d dist/lumen-termux 2>/dev/null | grep -i needed || echo "  statis, tanpa dynamic linking"
+	@echo "== e_type (harus DYN / PIE, BUKAN EXEC) =="
+	@readelf -h dist/lumen-termux | grep -E 'Type|Machine'
+	@readelf -h dist/lumen-termux | grep -q 'DYN' \
+		|| { echo "  GAGAL: e_type bukan PIE, Android akan menolaknya"; exit 1; }
+	@echo "  PIE — akan diterima Android"
+	@echo "== interpreter =="
+	@readelf -l dist/lumen-termux | grep -i 'interpreter' || true
+	@echo "== dynamic libs (boleh kosong) =="
+	@readelf -d dist/lumen-termux 2>/dev/null | grep -i needed || echo "  tidak ada NEEDED — self-contained"
 	@echo "== salin ke HP =="
 	@echo "  scp dist/lumen-termux <user>@<ip>:~/bin/lumen"
 
