@@ -88,9 +88,12 @@ type Report struct {
 
 	// Candidates adalah kandidat kerentanan berdasarkan OWASP, lengkap
 	// dengan langkah verifikasi. Wajib ada di JSON — output terminal cuma
-	// ringkasan, sedangkan bagian yang menentukanXx tindakan ada di sini.
+	// ringkasan, sedangkan bagian yang menentukan tindakan ada di sini.
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// Coverage menyatakan apa yang tidak diuji. Tanpa ini, laporan kosong
 	// terlihat sama dengan laporan yang bersih.
 	Coverage Coverage `json:"coverage"`
+	// Authz menyimpan hasil perbandingan akses. Hanya ada kalau pemeriksaan
+	// diferensial dijalankan.
+	Authz *AuthzReport `json:"authz,omitempty"`
 }

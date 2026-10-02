@@ -5,3 +5,7 @@ dist/
 *.sarif
 *.txt
 !README.md
+
+# config yang berisi token
+lumen.yaml
+*.local.yaml

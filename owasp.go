@@ -85,7 +85,14 @@ type Candidate struct {
 	Signal     string   `json:"signal"` // bukti statis yang memunculkan ini
 	Verify     string   `json:"verify"` // langkah konfirmasi manual
 	Remediate  string   `json:"remediate"`
+	// Examples adalah endpoint yang memunculkan kategori ini. Disimpan di
+	// laporan karena "30 kandidat" tanpa contoh tidak bisa ditindaklanjuti;
+	// orang harus bisa langsung membuka satu URL untuk diperiksa.
+	Examples []string `json:"examples,omitempty"`
 }
+
+// Count mengembalikan jumlah endpoint yang jadi contoh.
+func (c Candidate) Count() int { return len(c.Examples) }
 
 // Classify mengubah endpoint + temuan menjadi daftar kandidat kerentanan.
 //

@@ -32,25 +32,38 @@ import (
 	"time"
 )
 
+// Nilai bawaan flag, dipakai untuk membedakan "user tidak menetapkannya"
+// dari "user menetapkannya dengan nilai yang sama". Config hanya menimpa
+// yang tidak ditegaskan user secara eksplisit.
+const (
+	defaultDelay   = 250 * time.Millisecond
+	defaultConc    = 4
+	defaultTimeout = 3 * time.Minute
+)
+
 func main() {
 	log.SetFlags(0)
 
 	var (
-		target   = flag.String("target", "", "URL target, contoh https://staging.example.com")
-		outDir   = flag.String("out", "out", "direktori output")
-		stem     = flag.String("name", "", "nama file output tanpa ekstensi (default: dari host target)")
-		conc     = flag.Int("conc", 4, "request paralel")
-		delay    = flag.Duration("delay", 250*time.Millisecond, "jeda minimal antar request")
-		doProbe  = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS (OPTIONS saja)")
-		timeout  = flag.Duration("timeout", 3*time.Minute, "batas waktu total")
-		quiet    = flag.Bool("quiet", false, "hanya cetak ringkasan singkat")
-		noCol    = flag.Bool("no-color", false, "matikan warna (default: autodeteksi terminal)")
-		ascii    = flag.Bool("ascii", false, "pakai karakter ASCII, bukan unicode")
-		width    = flag.Int("width", 0, "lebar output kolom; 0 = autodeteksi (berguna di Termux)")
-		showVer  = flag.Bool("version", false, "tampilkan versi lalu keluar")
-		sarif    = flag.Bool("sarif", true, "tulis findings.sarif (SARIF 2.1.0) untuk CI/code scanning")
-		exitZero = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
-		compact  = flag.Bool("compact", false, "ringkas: batas daftar per kategori")
+		target      = flag.String("target", "", "URL target, contoh https://staging.example.com")
+		outDir      = flag.String("out", "out", "direktori output")
+		stem        = flag.String("name", "", "nama file output tanpa ekstensi (default: dari host target)")
+		conc        = flag.Int("conc", defaultConc, "request paralel")
+		delay       = flag.Duration("delay", defaultDelay, "jeda minimal antar request")
+		doProbe     = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS (OPTIONS saja)")
+		timeout     = flag.Duration("timeout", defaultTimeout, "batas waktu total")
+		quiet       = flag.Bool("quiet", false, "hanya cetak ringkasan singkat")
+		noCol       = flag.Bool("no-color", false, "matikan warna (default: autodeteksi terminal)")
+		ascii       = flag.Bool("ascii", false, "pakai karakter ASCII, bukan unicode")
+		width       = flag.Int("width", 0, "lebar output kolom; 0 = autodeteksi (berguna di Termux)")
+		showVer     = flag.Bool("version", false, "tampilkan versi lalu keluar")
+		sarif       = flag.Bool("sarif", true, "tulis findings.sarif (SARIF 2.1.0) untuk CI/code scanning")
+		exitZero    = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
+		compact     = flag.Bool("compact", false, "ringkas: batas daftar per kategori")
+		cfgPath     = flag.String("config", "", "file konfigurasi YAML (multi-target, token authz)")
+		runAuthz    = flag.Bool("authz", false, "pemeriksaan otorisasi diferensial (butuh config + token)")
+		tuiMode     = flag.Bool("tui", false, "dashboard interaktif")
+		tuiDisabled = flag.Bool("no-tui", false, "paksa output teks biasa, tanpa dashboard")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -59,24 +72,61 @@ func main() {
 		fmt.Println(lumen.Banner())
 		return
 	}
+	// Config multi-target. Kalau ada, dia yang menentukan apa yang dipindai;
+	// -target dipakai untuk menambah satu target di luar config.
+	var cfg lumen.Config
+	if *cfgPath != "" {
+		var err error
+		if cfg, err = lumen.LoadConfig(*cfgPath); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		if cfg.Defaults.Delay != "" && *delay == defaultDelay {
+			if *delay, err = time.ParseDuration(cfg.Defaults.Delay); err != nil {
+				log.Fatalf("config defaults.delay: %v", err)
+			}
+		}
+		if cfg.Defaults.Conc > 0 && *conc == defaultConc {
+			*conc = cfg.Defaults.Conc
+		}
+		if cfg.Defaults.Timeout != "" && *timeout == defaultTimeout {
+			if *timeout, err = time.ParseDuration(cfg.Defaults.Timeout); err != nil {
+				log.Fatalf("config defaults.timeout: %v", err)
+			}
+		}
+	}
+
 	// Target boleh datang dari env var. Di HP, mengetik URL panjang di
-	// keyboard virtual: lambat, dan gampang nekan
-	//ENTER di tengah kata (yang terjadi ke kita: "-wi" + "dth"). Sekali set,
-	// selamanya pakai nama pendek.
+	// keyboard virtual itu lambat dan gampang nekan ENTER di tengah kata
+	// (yang terjadi ke kita: "-wi" + "dth"). Sekali set, selamanya pakai
+	// nama pendek.
 	if *target == "" {
 		*target = os.Getenv("LUMEN_TARGET")
 	}
-	if *target == "" {
+
+	// job didefinisikan di luar main supaya cmd/tui.go bisa memakainya
+	// saat menjalankan pemetaan ulang.
+	var jobs []job
+	for _, t := range cfg.Targets {
+		// Target authz hanya dipindai kalau authz diminta. Tanpa flag itu,
+		// pemetaan tetap jalan seperti biasa.
+		if t.Authz && !*runAuthz {
+			continue
+		}
+		jobs = append(jobs, job{t.Name, t.URL, t.Authz, t.Tokens})
+	}
+	if *target != "" {
+		j := job{url: *target, name: *stem}
+		if j.name == "" {
+			j.name = hostOf(j.url)
+		}
+		jobs = append(jobs, j)
+	}
+	if len(jobs) == 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
-
-	u, err := url.Parse(*target)
-	if err != nil || u.Host == "" {
-		log.Fatalf("URL tidak valid: %v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		log.Fatalf("scheme harus http atau https, dapat %q", u.Scheme)
+	if *runAuthz && !cfg.HasAuthz() {
+		log.Fatalf("-authz butuh -config yang punya target dengan authz: true")
 	}
 
 	// Gaya tampilan ditentukan sekali, di sini, lalu diteruskan ke report.
@@ -93,18 +143,6 @@ func main() {
 		style.Width = *width
 	}
 
-	host := u.Hostname()
-	name := *stem
-	if name == "" {
-		name = sanitise(host)
-	}
-
-	if !*quiet {
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-
 	// Ctrl-C menghentikan dengan rapi dan tetap menulis laporan yang sudah
 	// terkumpul. Laporan parsial jauh lebih berguna daripada tidak ada.
 	sig := make(chan os.Signal, 1)
@@ -112,98 +150,210 @@ func main() {
 	go func() {
 		<-sig
 		fmt.Fprintln(os.Stderr, "\ndihentikan — menulis laporan parsial")
-		cancel()
+		cancelled = true
+		stop()
 	}()
 
-	start := time.Now()
-	m := lumen.NewMapper(lumen.MapperConfig{
-		Target: u, Conc: *conc, Delay: *delay,
-	})
-	m.Run(ctx)
-
-	pages, eps, findings, stats := m.Snapshot()
-
-	if *doProbe {
-		probed := lumen.ProbeEndpoints(ctx, m, eps, lumen.ProbeOptions{Conc: *conc})
-		// gabungkan status/flag dari probe ke endpoint asal
-		byKey := map[string]lumen.Endpoint{}
-		for _, e := range eps {
-			byKey[e.Method+" "+e.Path] = e
+	worst := 0
+	for _, j := range jobs {
+		u, err := url.Parse(j.url)
+		if err != nil || u.Host == "" {
+			log.Fatalf("URL tidak valid (%s): %v", j.url, err)
 		}
-		for _, e := range probed {
-			k := e.Method + " " + e.Path
-			if orig, ok := byKey[k]; ok {
-				orig.Status = e.Status
-				orig.Flags = dedupStrings(append(orig.Flags, e.Flags...))
-				byKey[k] = orig
+		if u.Scheme != "http" && u.Scheme != "https" {
+			log.Fatalf("scheme harus http atau https, dapat %q (%s)", u.Scheme, j.url)
+		}
+
+		jobCtx, jobCancel := context.WithTimeout(context.Background(), *timeout)
+		start := time.Now()
+
+		m := lumen.NewMapper(lumen.MapperConfig{Target: u, Conc: *conc, Delay: *delay})
+		m.Run(jobCtx)
+		pages, eps, findings, stats := m.Snapshot()
+
+		if *doProbe {
+			applyProbe(jobCtx, m, &eps, &findings, *conc)
+		}
+		findings = lumen.BySeverity(findings)
+
+		cands := lumen.Classify(eps, findings)
+		cov := lumen.BuildCoverage(lumen.Report{Stats: stats})
+
+		rep := lumen.Report{
+			Target:      u.String(),
+			GeneratedAt: time.Now().UTC(),
+			DurationMS:  time.Since(start).Milliseconds(),
+			Pages:       pages,
+			Endpoints:   eps,
+			Findings:    findings,
+			ScopeDenied: m.Scope().Denied(),
+			Stats:       stats,
+			Candidates:  cands,
+			Coverage:    cov,
+		}
+
+		// Pemeriksaan otorisasi diferensial. Hanya GET; endpoint write tidak
+		// pernah dipanggil karena memanggilnya berarti menjalankan write yang
+		// tidak perlu terjadi hanya untuk membuktikan sesuatu.
+		var authzReps []lumen.AuthzReport
+		if j.authz {
+			tg := lumen.Target{Name: j.name, URL: j.url, Authz: true, Tokens: j.toks}
+			names := tg.TokenNames()
+			if len(names) < 2 {
+				log.Fatalf("target %s: authz butuh minimal 2 perspektif", j.name)
+			}
+			opts := lumen.AuthzOptions{
+				Baseline:  "anon",
+				Compare:   names[1:],
+				DelayMS:   int(delay.Milliseconds()),
+				OnlyPaths: cfg.Defaults.AuthzOnly,
+				SkipPaths: cfg.Defaults.AuthzSkip,
+			}
+			ar, err := lumen.RunAuthz(jobCtx, tg.HTTPClient(), tg, eps, opts)
+			if err != nil && jobCtx.Err() == nil {
+				log.Fatalf("authz %s: %v", j.name, err)
+			}
+			for _, r := range ar.Results {
+				if f := lumen.FindingFromAuthz(r); f != nil {
+					rep.Findings = append(rep.Findings, *f)
+				}
+			}
+			rep.Findings = lumen.BySeverity(rep.Findings)
+			rep.Authz = &ar
+			authzReps = append(authzReps, ar)
+		}
+
+		code := lumen.ExitCode(lumen.Report{Stats: stats}, cands)
+		if j.authz && code == 0 {
+			code = lumen.ExitCode(rep, cands)
+		}
+		if code > worst {
+			worst = code
+		}
+
+		name := j.name
+		if name == "" {
+			name = sanitise(u.Hostname())
+		}
+		if err := os.MkdirAll(*outDir, 0o700); err != nil {
+			log.Fatalf("gagal membuat folder output: %v", err)
+		}
+		jsonPath := filepath.Join(*outDir, name+".json")
+		textPath := filepath.Join(*outDir, name+".txt")
+		compact := *compact || style.Width < 70
+		if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov, compact, authzReps); err != nil {
+			log.Fatalf("gagal menulis laporan: %v", err)
+		}
+
+		// SARIF 2.1.0: format yang sudah dipahami GitHub code scanning,
+		// GitLab, dan sebagian besar pipeline.
+		sarifPath := filepath.Join(*outDir, name+".sarif")
+		if *sarif {
+			if err := lumen.WriteSARIF(sarifPath, lumen.BuildSARIF(rep, cands, cov, code)); err != nil {
+				log.Fatalf("gagal menulis SARIF: %v", err)
 			}
 		}
-		eps = eps[:0]
-		for _, e := range byKey {
-			eps = append(eps, e)
+
+		if *quiet {
+			jobCancel()
+			continue
 		}
-		// turning findings dari probe
-		for _, e := range probed {
-			if len(e.Flags) == 0 {
-				continue
-			}
-			findings = append(findings, lumen.Finding{
-				Kind:     "endpoint",
-				Severity: lumen.FlagSeverity(e.Flags),
-				Where:    e.Path,
-				Detail:   fmt.Sprintf("%s -> %d %v", e.Method, e.Status, e.Flags),
-			})
+
+		// TUI hanya masuk akal untuk satu target: kalau beberapa, pengguna
+		// tidak bisa tahu sedang melihat yang mana tanpa menambah Kali ini
+		// jadi pilihan, bukan kewajiban.
+		useTUI := false
+		if *tuiMode || !*tuiDisabled {
+			useTUI = len(jobs) == 1 && isTerminal(os.Stdout)
 		}
-	}
+		if useTUI {
+			runTUI(name, &rep, cands, cov, compact, authzReps, jsonPath, textPath, sarifPath, *sarif, *conc, *delay, *timeout, *doProbe, j)
+		} else {
+			fmt.Print(lumen.Render(rep, style, cands, cov, compact, authzReps))
+			fmt.Print(lumen.Footer(jsonPath, textPath, style, sarifPath, *sarif))
+		}
+		jobCancel()
 
-	findings = lumen.BySeverity(findings)
-
-	// Kandidat OWASP + cakupan. Klasifikasi memakai sinyal statis, jadi
-	// hasilnya sengaja disebut kandidat dan selalu disertai langkah
-	// verifikasi — bukan "temuan terbukti".
-	cands := lumen.Classify(eps, findings)
-	cov := lumen.BuildCoverage(lumen.Report{Stats: stats})
-
-	code := lumen.ExitCode(lumen.Report{Stats: stats}, cands)
-	rep := lumen.Report{
-		Target:      u.String(),
-		GeneratedAt: time.Now().UTC(),
-		DurationMS:  time.Since(start).Milliseconds(),
-		Pages:       pages,
-		Endpoints:   eps,
-		Findings:    findings,
-		ScopeDenied: m.Scope().Denied(),
-		Stats:       stats,
-		Candidates:  cands,
-		Coverage:    cov,
-	}
-
-	jsonPath := filepath.Join(*outDir, name+".json")
-	textPath := filepath.Join(*outDir, name+".txt")
-	if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov, *compact || style.Width < 70); err != nil {
-		log.Fatalf("gagal menulis laporan: %v", err)
-	}
-
-	// SARIF 2.1.0: format yang sudah dipahami GitHub code scanning, GitLab,
-	// dan sebagian besar pipeline. Tanpa ini setiap adopter harus menulis
-	// parser sendiri — dan pada praktiknya tidak ada yang mau.
-	sarifPath := filepath.Join(*outDir, name+".sarif")
-	if *sarif {
-		if err := lumen.WriteSARIF(sarifPath, lumen.BuildSARIF(rep, cands, cov, code)); err != nil {
-			log.Fatalf("gagal menulis SARIF: %v", err)
+		if cancelled {
+			break
 		}
 	}
-
-	fmt.Print(lumen.Render(rep, style, cands, cov, *compact || style.Width < 70))
-	fmt.Print(lumen.Footer(jsonPath, textPath, style, sarifPath, *sarif))
 
 	// Exit code hanya berarti kalau aman dipakai di pipeline; kalau human
 	// yang menjalankan dari terminal, keluar dengan kode bukan error
 	// membingungkan.
-	if *exitZero {
+	if *exitZero || cancelled {
 		return
 	}
-	os.Exit(code)
+	os.Exit(worst)
+}
+
+// job adalah satu target yang akan dipindai. Didefinisikan di level
+// package supaya bisa dipakai oleh runner TUI.
+type job struct {
+	name  string
+	url   string
+	authz bool
+	toks  lumen.Tokens
+}
+
+// applyProbe menjalankan verifikasi OPTIONS lalu menggabungkan hasilnya ke
+// endpoint asal. Status dan flag ditulis balik ke slice yang sama supaya
+// tidak ada dua sumber kebenaran.
+func applyProbe(ctx context.Context, m *lumen.Mapper, eps *[]lumen.Endpoint, findings *[]lumen.Finding, conc int) {
+	list := *eps
+	probed := lumen.ProbeEndpoints(ctx, m, list, lumen.ProbeOptions{Conc: conc})
+
+	byKey := map[string]lumen.Endpoint{}
+	for _, e := range list {
+		byKey[e.Method+" "+e.Path] = e
+	}
+	for _, e := range probed {
+		k := e.Method + " " + e.Path
+		if orig, ok := byKey[k]; ok {
+			orig.Status = e.Status
+			orig.Flags = dedupStrings(append(orig.Flags, e.Flags...))
+			byKey[k] = orig
+		}
+	}
+	merged := make([]lumen.Endpoint, 0, len(byKey))
+	for _, e := range byKey {
+		merged = append(merged, e)
+	}
+	*eps = merged
+
+	for _, e := range probed {
+		if len(e.Flags) == 0 {
+			continue
+		}
+		*findings = append(*findings, lumen.Finding{
+			Kind:     "endpoint",
+			Severity: lumen.FlagSeverity(e.Flags),
+			Where:    e.Path,
+			Detail:   fmt.Sprintf("%s -> %d %v", e.Method, e.Status, e.Flags),
+		})
+	}
+}
+
+var (
+	cancelled bool
+	stop      context.CancelFunc
+)
+
+func init() {
+	// Satu context global yang bisa dibatalkan Ctrl-C, dipakai supaya
+	// goroutine penangkap sinyal bisa menghentikan scan yang sedang jalan.
+	var c context.Context
+	c, stop = context.WithCancel(context.Background())
+	_ = c
+}
+
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "target"
+	}
+	return sanitise(u.Hostname())
 }
 
 func usage() {

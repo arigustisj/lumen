@@ -1,0 +1,58 @@
+# Contoh konfigurasi untuk pemakaian internal.
+#
+# Salin ke lumen.yaml lalu sesuaikan. JANGAN commit file ini kalau sudah
+# diisi token sungguhan — masukkan ke .gitignore.
+#
+# Jalankan:
+#   lumen -config lumen.yaml            # pemetaan semua target
+#   lumen -config lumen.yaml -authz     # plus pemeriksaan otorisasi
+
+defaults:
+  delay: 300ms
+  conc: 4
+  timeout: 180s
+  probe: true
+
+  # akan menerima banyak request tapi tidak pernah bisa bocor — health check,
+  # menerima banyak request tapi tidak pernah bisa bocor — health check,
+  # aset statis, dan подобное.
+  authz-skip:
+    - /health
+    - /static
+    - /favicon
+    - /assets
+
+  # Kosongkan untuk menguji semua GET yang layak. Kalau daftarnya ada,
+  # hanya endpoint yang mengandung salah satu pola ini yang diuji —
+  # berguna kalau layanan punya ribuan endpoint dan authz_check
+  # hanya perlu berjalan di area sensitif.
+  authz-only: []
+  #   - /admin
+  #   - /api/account
+  #   - /api/user
+
+targets:
+  # ── Target dengan pemeriksaan otorisasi ───────────────────────────────────
+  #
+  # authz: true membandingkan respons antar perspektif. Yang paling penting
+  # adalah "anon" — perspektif tanpa header otorisasi sama sekali.
+  #
+  # Dua akun yang berbeda dipakai untuk mendeteksi BOLA (API1): kalau akun A
+  # dan akun B mendapat data berbeda pada endpoint yang sama, ada peluang
+  # kepemilikan objek tidak diperiksa. Akun yang ideal adalah dua akun test
+  # milik orang berbeda, bukan dua token untuk akun yang sama.
+  - name: parama-stag
+    url: https://parama-stag.coba-sam.com
+    authz: true
+    tokens:
+      # Nilai kosong = tanpa header. Ini perspektif pembanding utama dan
+      # boleh dikosongkan — justru itu maksudnya.
+      anon: ""
+      # Header siap pakai. Boleh "Bearer xyz", "X-Api-Key: xyz", atau
+      # nama header lengkap lain.
+      as_user_a: "Bearer TOKEN_ANDA"
+      as_user_b: "Bearer TOKEN_ANDA"
+
+  # ── Target pemetaan saja ─────────────────────────────────────────────────
+  - name: billing-stag
+    url: https://billing-staging.kantor.id

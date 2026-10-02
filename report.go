@@ -33,7 +33,7 @@ func Write(path string, r Report) error {
 // hilang di setiap halaman menghasilkan puluhan baris low/info yang
 // menenggelamkan yang penting — dan output yang tidak dibaca sama sekali
 // setara dengan output yang tidak ada.
-func Render(r Report, s Style, cands []Candidate, cov Coverage, compact bool) string {
+func Render(r Report, s Style, cands []Candidate, cov Coverage, compact bool, authz []AuthzReport) string {
 	var b strings.Builder
 	g := s.Glyph
 
@@ -375,7 +375,7 @@ func Footer(jsonPath, textPath string, s Style, sarifPath string, withSarif bool
 //
 // Teks yang disimpan SELALU tanpa escape warna: file ini dibaca manusia dan
 // mungkin di-grep, dan karakter ANSI di dalam file cuma jadi sampah.
-func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate, cov Coverage, compact bool) error {
+func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate, cov Coverage, compact bool, authz []AuthzReport) error {
 	if err := Write(jsonPath, r); err != nil {
 		return err
 	}
@@ -389,7 +389,7 @@ func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate,
 	}
 	plain := Plain(s.Unicode)
 	plain.Width = 100
-	return os.WriteFile(textPath, []byte(Render(r, plain, cands, cov, compact)), 0o600)
+	return os.WriteFile(textPath, []byte(Render(r, plain, cands, cov, compact, authz)), 0o600)
 }
 
 // BySeverity mengurutkan temuan dari yang paling serius.
@@ -401,4 +401,55 @@ func BySeverity(fs []Finding) []Finding {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return rank[out[i].Severity] < rank[out[j].Severity] })
 	return out
+}
+
+// evidenceOf merangkum bukti per perspektif untuk satu endpoint.
+func evidenceOf(r AuthzResult) string {
+	var parts []string
+	for _, k := range sortedViewKeys(r.Views) {
+		v := r.Views[k]
+		if v.Error != "" {
+			parts = append(parts, k+"="+truncMid(v.Error, 28))
+			continue
+		}
+		if v.Redirect != "" {
+			parts = append(parts, fmt.Sprintf("%s=%d→%s", k, v.Status, truncMid(v.Redirect, 24)))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d/%dB", k, v.Status, v.Length))
+	}
+	return strings.Join(parts, "  ")
+}
+
+func verdictLabel(v string) string {
+	switch v {
+	case "anon-terbuka":
+		return "ANON TERBUKA"
+	case "bola-dicurigai":
+		return "BOLA?"
+	case "auth-tidak-aktif":
+		return "AUTH OFF"
+	default:
+		return v
+	}
+}
+
+func verdictColour(v string, s Style) func(string) string {
+	switch v {
+	case "anon-terbuka":
+		return s.Red
+	case "bola-dicurigai":
+		return s.Yellow
+	default:
+		return s.Dim
+	}
+}
+
+func truncMid(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	half := (n - 1) / 2
+	return string(r[:half]) + "…" + string(r[len(r)-half:])
 }
