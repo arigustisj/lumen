@@ -187,6 +187,7 @@ func main() {
 			Endpoints:   eps,
 			Findings:    findings,
 			ScopeDenied: m.Scope().Denied(),
+			RootError:   m.RootError(),
 			Stats:       stats,
 			Candidates:  cands,
 			Coverage:    cov,

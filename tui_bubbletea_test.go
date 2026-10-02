@@ -344,3 +344,81 @@ func TestTUINilaiRingkasanTidakMempel(t *testing.T) {
 		}
 	}
 }
+
+// TestTUILayarPembukaAda lalu hilang — judul besar hanya tampil di awal.
+func TestTUILayarPembukaAdaLaluHilang(t *testing.T) {
+	m := testModel(t, 100, 30)
+	if !m.intro {
+		t.Fatal("model harus mulai dengan layar pembuka")
+	}
+	view := m.View()
+	if !strings.Contains(view, "LUMEN") && !strings.Contains(view, "lumen") {
+		t.Errorf("layar pembuka harus menampilkan judul, dapat:\n%s", view)
+	}
+	if !strings.Contains(view, "by 0xlzy") {
+		t.Errorf("layar pembuka harus menampilkan authorship, dapat:\n%s", view)
+	}
+	// Tekan tombol apa saja untuk menutupnya.
+	m = special(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.intro {
+		t.Error("tombol harus menutup layar pembuka")
+	}
+	if strings.Contains(m.View(), "0xlzy") {
+		t.Error("judul besar tidak boleh muncul lagi setelah ditutup")
+	}
+}
+
+// TestTUIScanGagalTerlihatJelas — scan yang gagal total harus tampil sebagai
+// kegagalan, bukan sebagai dashboard kosong. "0 endpoint" karena tidak ada
+// API sama sekali berbeda artinya dari "tidak sempat konek".
+func TestTUIScanGagalTerlihatJelas(t *testing.T) {
+	m := testModel(t, 100, 30)
+	// intro sengaja dibiarkan true: error harus menang atas layar pembuka.
+	m.intro = true
+	m.rep.RootError = `Get "https://x.test": dial tcp: lookup x.test: no such host`
+
+	view := m.View()
+	if !strings.Contains(view, "GAGAL SCAN") {
+		t.Errorf("harus terlihat sebagai gagal, dapat:\n%s", view)
+	}
+	if !strings.Contains(view, "no such host") {
+		t.Error("pesan error asli harus ditampilkan, jangan disamar jadi umum")
+	}
+	// Harus ada langkah yang bisa dicoba, bukan cuma memberitahu gagal.
+	if !strings.Contains(view, "DNS") {
+		t.Errorf("diagnosis harus menyebut DNS untuk error no such host, dapat:\n%s", view)
+	}
+}
+
+// TestTUITampilanKosongDenganRootErrorTidakBohong — tanpa RootError, dashboard
+// kosong tetap boleh (memang tidak ada API), tapi tidak boleh mengklaim gagal.
+func TestTUITampilanKosongDenganRootErrorTidakBohong(t *testing.T) {
+	m := testModel(t, 100, 30)
+	m.intro = false
+	m.rep.RootError = ""
+	view := m.View()
+	if strings.Contains(view, "GAGAL SCAN") {
+		t.Error("tidak ada RootError, jadi jangan menampilkan gagal")
+	}
+}
+
+// TestDiagnoseMenyetapoiPenVsGejala — pesan yang sama harus menghasilkan
+// langkah yang bisa dicoba.
+func TestDiagnoseMenyetapoiPenVsGejala(t *testing.T) {
+	cases := map[string]string{
+		"no such host":                  "DNS",
+		"context deadline exceeded":     "timeout",
+		"connection refused":            "koneksi ditolak",
+		"x509: certificate has expired": "sertifikat",
+	}
+	for msg, want := range cases {
+		out := diagnose(msg)
+		joined := strings.Join(out, " | ")
+		if !strings.Contains(joined, want) {
+			t.Errorf("diagnose(%q) = %v, harus memuat %q", msg, out, want)
+		}
+		if len(out) == 0 {
+			t.Errorf("diagnose(%q) kosong — selalu ada langkah fallback", msg)
+		}
+	}
+}

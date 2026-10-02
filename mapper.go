@@ -53,7 +53,26 @@ type Mapper struct {
 	pages     []Page
 	endpoints map[string]Endpoint
 	findings  []Finding
+	// root adalah URL awal pemetaan, dicatat terpisah supaya kegagalannya
+	// bisa dibedakan dari kegagalan halaman lain.
+	root string
+	// rootErr menyimpan kegagalan pengambilan halaman pertama. Tanpa ini,
+	// scan yang gagal total terlihat sama persis dengan scan yang berhasil
+	// tapi memang tidak menemukan apa pun — dan orang menyimpulkan situsnya
+	// aman karena laporan kosong.
+	rootErr string
 }
+
+// RootError mengembalikan kegagalan pengambilan halaman awal, atau kosong
+// kalau halaman awal sempat TERambil.
+func (m *Mapper) RootError() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rootErr
+}
+
+// IsRoot menandai URL sebagai titik awal pemetaan.
+func (m *Mapper) IsRoot(u string) bool { return u == m.cfg.Target.String() || u == m.cfg.Target.Host }
 
 func NewMapper(cfg MapperConfig) *Mapper {
 	if cfg.Conc < 1 {
@@ -128,7 +147,15 @@ func (m *Mapper) Target() *url.URL { return m.cfg.Target }
 // tertentu: crawler yang berhenti tepat di tengah hanya menghasilkan laporan
 // yang terlihat lengkap padahal belum.
 func (m *Mapper) Run(ctx context.Context) {
+	// start dicatat eksplisit supaya kegagalan di halaman awal bisa
+	// dibedakan dari kegagalan halaman mana pun. Tanpa penanda ini, scan
+	// yang gagal total terlihat sama dengan scan yang berhasil tetapi
+	// memang tidak menemukan apa pun.
 	start := Canonical(m.cfg.Target.String())
+	m.mu.Lock()
+	m.root = start
+	m.mu.Unlock()
+
 	m.markSeen(start)
 	m.enqueue(start)
 
@@ -186,8 +213,21 @@ func (m *Mapper) markSeen(u string) bool {
 func (m *Mapper) crawlOne(ctx context.Context, raw string) {
 	code, body, hdr, err := m.get(ctx, raw)
 	if err != nil {
+		m.mu.Lock()
+		isRoot := raw == m.root
+		if isRoot {
+			m.rootErr = err.Error()
+		}
+		m.mu.Unlock()
 		m.bump("error")
-		m.finding("error", SevInfo, raw, "gagal diambil: "+err.Error())
+		// Kegagalan di halaman awal adalah kegagalan scan, bukan temuan
+		// ringan. Menaruhnya sebagai "info" membuatnya hilang di antara
+		// bar komposisi.
+		sev := SevInfo
+		if isRoot {
+			sev = SevHigh
+		}
+		m.finding("scan-gagal", sev, raw, "gagal diambil: "+err.Error())
 		return
 	}
 	m.bump("crawled")

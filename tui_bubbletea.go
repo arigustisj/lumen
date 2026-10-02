@@ -88,6 +88,9 @@ type TUIModel struct {
 
 	focus  int
 	scroll map[string]int
+	// intro mengendalikan layar pembuka. Dimunculkan sekali di awal supaya
+	// ada nama dan konteks yang jelas sebelum isi dashboard mengalir.
+	intro bool
 
 	width, height int
 	compact       bool
@@ -123,6 +126,7 @@ func (m *TUIModel) Seed(rep *Report, cands []Candidate, cov Coverage, authz []Au
 		m.target = rep.Target
 	}
 	m.phase = PhaseDone
+	m.intro = true
 }
 
 func (m *TUIModel) Init() tea.Cmd {
@@ -190,6 +194,13 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *TUIModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Tombol apa pun menutup layar pembuka — kecuali "q", yang tetap keluar.
+	// Menahan pembuka sampai user menekan tombol tertentu hanya menambah
+	// satu langkah tanpa manfaat.
+	if m.intro && msg.String() != "ctrl+c" && msg.String() != "q" {
+		m.intro = false
+	}
+
 	// Pintasan global.
 	switch msg.String() {
 	case "ctrl+c", "q":

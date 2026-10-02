@@ -13,10 +13,10 @@ const (
 	Name    = "lumen"
 	Tagline = "pemeta permukaan aplikasi web"
 	Author  = "0xlzy"
-	Version = "0.1.0"
+	Version = "0.3.1"
 )
 
-// Banner mengembalikan satu baris identitas, mis. "lumen 0.1.0 — pemeta
+// Banner mengembalikan satu baris identitas, mis. "lumen 0.3.1 — pemeta
 // permukaan aplikasi web · by 0xlzy".
 func Banner() string {
 	return Name + " " + Version + " · " + Tagline + " · by " + Author
@@ -93,6 +93,9 @@ type Report struct {
 	// Coverage menyatakan apa yang tidak diuji. Tanpa ini, laporan kosong
 	// terlihat sama dengan laporan yang bersih.
 	Coverage Coverage `json:"coverage"`
+	// RootError mengisi kalau halaman awal gagal diambil. Wajib ada supaya
+	// laporan kosong bisa dibedakan dari laporan yang gagal.
+	RootError string `json:"root_error,omitempty"`
 	// Authz menyimpan hasil perbandingan akses. Hanya ada kalau pemeriksaan
 	// diferensial dijalankan.
 	Authz *AuthzReport `json:"authz,omitempty"`

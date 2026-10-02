@@ -130,6 +130,23 @@ func (m *TUIModel) viewBody() string {
 		return m.viewFailed()
 	}
 
+	// Scan yang gagal total harus terlihat sebagai kegagalan, bukan sebagai
+	// laporan kosong. "0 endpoint" dan "belum sempat konek" artinya dua hal
+	// yang sama sekali berbeda, dan hanya yang pertama yang aman disimpulkan.
+	//
+	// Diperiksa SEBELUM layar pembuka: menampilkan judul besar dengan
+	// angka nol untuk scan yang gagal hanya menambahkan satu langkah
+	// sekaligusego mengulang ilusi yang sama.
+	if m.rep != nil && m.rep.RootError != "" {
+		return m.viewRootError()
+	}
+
+	// Layar pembuka: judul besar sekali, lalu langsung hilang begitu ada
+	// tombol. Menahannya tidak menambah informasi apa pun.
+	if m.intro {
+		return m.viewIntro()
+	}
+
 	p := panels[m.focus]
 	content := p.Render(m, m.contentWidth(), m.contentHeight())
 
@@ -214,6 +231,121 @@ func (m *TUIModel) panelCount(key string) int {
 		return len(m.cov.NotTested)
 	}
 	return 0
+}
+
+// bigTitle adalah judul blok besar untuk layar pembuka. Lebarnya dibatasi
+// supaya muat di terminal sempit — di HP 56 kolom, judul yang terlalu lebar
+// justru terpotong jadi tidak terbaca.
+var bigTitle = []string{
+	"██╗      ██╗   ██╗███╗   ███╗███████╗███╗   ██╗",
+	"██║      ██║   ██║████╗ ████║██╔════╝████╗  ██║",
+	"██║      ██║   ██║██╔████╔██║█████╗  ██╔██╗ ██║",
+	"██║      ██║   ██║██║╚██╔╝██║██╔══╝  ██║╚██╗██║",
+	"███████╗ ╚██████╔╝██║ ╚═╝ ██║███████╗██║ ╚████║",
+	"╚══════╝  ╚═════╝ ╚═╝     ╚═╝╚══════╝╚═╝  ╚═══╝",
+}
+
+// smallTitle adalah judul blok untuk terminal sempit. Lebar 22 kolom,
+// supaya masih terbaca di HP 40 kolom.
+var smallTitle = []string{
+	"█▛▀▜█ █▛▀█ █▀█▖▛▀▖█▛▀▖▛",
+	"█ ▀ █ █ █ ▀▄▖▀▀▄▖█▄▀▄▖█",
+	"█   █ █▄▄▄▄▀█▄▄▀█ █  █",
+	"▀   ▀ ▀▀▀▀▀▀▀ ▀▀▀ ▀  ▀",
+}
+
+// gArrow dipakai sebagai pemisah ringkas di dalam TUI. Glyph global milik
+// report.go ada di dalam fungsi, jadi TUI punya konstantanya sendiri.
+const gArrow = "→"
+
+func (m *TUIModel) viewIntro() string {
+	art := bigTitle
+	if m.width < 46 {
+		art = smallTitle
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, ln := range art {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cBrand).Render(" "+ln) + "\n")
+	}
+	b.WriteString("\n")
+	tag := Tagline + "  " + gArrow + "  by " + Author
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(cDim).Render(tag) + "\n\n")
+
+	if m.phase == PhaseDone && m.rep != nil {
+		n := fmt.Sprintf("%d halaman  %s  %d endpoint", len(m.rep.Pages), gArrow, len(m.rep.Endpoints))
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(cAccent).Render(n) + "\n\n")
+	}
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(cDim).
+		Render("↓ atau enter untuk membuka dashboard") + "\n")
+	w := m.contentWidth()
+	if w < 24 {
+		w = 24
+	}
+	return stBorder.Width(w-2).Padding(0, 1).Render(b.String())
+}
+
+// viewRootError menampilkan kegagalan pengambilan halaman awal beserta
+// diagnosis yang bisa langsung dicoba.
+func (m *TUIModel) viewRootError() string {
+	var b strings.Builder
+	b.WriteString("\n  " + lipgloss.NewStyle().Bold(true).Foreground(cHigh).
+		Render("GAGAL SCAN — halaman tidak bisa diambil") + "\n\n")
+	for _, ln := range wrapN(m.rep.RootError, m.contentWidth()-6) {
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(cText).Render(ln) + "\n")
+	}
+	b.WriteString("\n  " + stDim.Render(m.target) + "\n\n")
+
+	b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(cMedium).
+		Render("kemungkinan penyebab") + "\n")
+	for _, h := range diagnose(m.rep.RootError) {
+		// Baris lanjutan harus memakai indent yang sama dengan baris
+		// pertama; kalau tidak, teksnya terlihat keluar dari daftar.
+		for i, ln := range wrapN("· "+h, m.contentWidth()-10) {
+			if i == 0 {
+				b.WriteString("     " + stDim.Render(ln) + "\n")
+			} else {
+				b.WriteString("       " + stDim.Render(ln) + "\n")
+			}
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(cLow).Render("r") +
+		stDim.Render(" coba lagi   ") +
+		lipgloss.NewStyle().Foreground(cAccent).Render("q") +
+		stDim.Render(" keluar"))
+	b.WriteString("\n")
+	b.WriteString("  " + stDim.Render("laporan tetap ditulis ke out/ supaya bisa dikirim ke siapa pun yang perlu melihat"))
+
+	w := m.contentWidth()
+	if w < 30 {
+		w = 30
+	}
+	return stBorderHi.Width(w-2).Padding(0, 1).Render(b.String())
+}
+
+// diagnose mengubah pesan error jaringan menjadi langkah yang bisa dicoba.
+//
+// Ini bukan tebakan: setiap-butir memetakan pesan error yang memang
+// uversibly dihasilkan oleh net/http ke penyebab yang paling sering.
+func diagnose(msg string) []string {
+	m := strings.ToLower(msg)
+	var out []string
+	switch {
+	case strings.Contains(m, "no such host"), strings.Contains(m, "dns"):
+		out = append(out, "DNS tidak resolve — cek nama domain dan koneksi internet")
+	case strings.Contains(m, "i/o timeout"), strings.Contains(m, "timeout"), strings.Contains(m, "context deadline"):
+		out = append(out, "timeout — naikkan dengan -timeout 5m, atau kurangi beban jaringan")
+		out = append(out, "kalau di HP, ganti jaringan: Wi-Fi captive portal memblokir")
+	case strings.Contains(m, "connection refused"):
+		out = append(out, "koneksi ditolak — port tertutup atau server belum jalan")
+	case strings.Contains(m, "certificate"), strings.Contains(m, "x509"), strings.Contains(m, "tls"):
+		out = append(out, "sertifikat TLS bermasalah — cek tanggal dan hostname")
+	case strings.Contains(m, "network is unreachable"), strings.Contains(m, "unreachable"):
+		out = append(out, "tidak ada rute ke host — cek VPN dan jaringan")
+	}
+	out = append(out, "bisa juga salah ketik URL, atau target memang butuh autentikasi")
+	return out
 }
 
 func (m *TUIModel) viewScanning() string {
