@@ -50,6 +50,7 @@ func main() {
 		showVer  = flag.Bool("version", false, "tampilkan versi lalu keluar")
 		sarif    = flag.Bool("sarif", true, "tulis findings.sarif (SARIF 2.1.0) untuk CI/code scanning")
 		exitZero = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
+		compact  = flag.Bool("compact", false, "ringkas: batas daftar per kategori")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -57,6 +58,13 @@ func main() {
 	if *showVer {
 		fmt.Println(lumen.Banner())
 		return
+	}
+	// Target boleh datang dari env var. Di HP, mengetik URL panjang di
+	// keyboard virtual: lambat, dan gampang nekan
+	//ENTER di tengah kata (yang terjadi ke kita: "-wi" + "dth"). Sekali set,
+	// selamanya pakai nama pendek.
+	if *target == "" {
+		*target = os.Getenv("LUMEN_TARGET")
 	}
 	if *target == "" {
 		flag.Usage()
@@ -172,7 +180,7 @@ func main() {
 
 	jsonPath := filepath.Join(*outDir, name+".json")
 	textPath := filepath.Join(*outDir, name+".txt")
-	if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov); err != nil {
+	if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov, *compact || style.Width < 70); err != nil {
 		log.Fatalf("gagal menulis laporan: %v", err)
 	}
 
@@ -186,7 +194,7 @@ func main() {
 		}
 	}
 
-	fmt.Print(lumen.Render(rep, style, cands, cov))
+	fmt.Print(lumen.Render(rep, style, cands, cov, *compact || style.Width < 70))
 	fmt.Print(lumen.Footer(jsonPath, textPath, style, sarifPath, *sarif))
 
 	// Exit code hanya berarti kalau aman dipakai di pipeline; kalau human

@@ -33,7 +33,7 @@ func Write(path string, r Report) error {
 // hilang di setiap halaman menghasilkan puluhan baris low/info yang
 // menenggelamkan yang penting — dan output yang tidak dibaca sama sekali
 // setara dengan output yang tidak ada.
-func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
+func Render(r Report, s Style, cands []Candidate, cov Coverage, compact bool) string {
 	var b strings.Builder
 	g := s.Glyph
 
@@ -47,25 +47,21 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 	// Header: nama + versi di kiri, target di kanan baris yang sama kalau
 	// cukup lebar. Di layar sempit target pindah ke bawah supaya tidak
 	// menimpa nama.
+	// Header harus langsung berisi informasi, bukan hiasan.
+	// Di layar sempit, baris tagline dipindah ke footer: menambah satu
+	// baris penuh di atas sebelum konten dimulai terasa boros, dan itu
+	// itu yang bikin output "kepanjangan" di HP.
 	brand := s.Bold(s.Cyan(Name)) + s.Gray(" "+Version)
-	brandW := len([]rune(brand)) + 4
 	head := brand
-	if targetLine := r.Target; len([]rune(brand))+len([]rune(targetLine))+6 <= s.Width {
-		gap := s.Width - brandW - len([]rune(targetLine))
-		head = brand + strings.Repeat(" ", maxInt(1, gap)) + s.Dim(targetLine)
-	} else {
-		head = brand + "\n  " + s.Dim(r.Target)
+	if t := strings.TrimPrefix(r.Target, "https://"); len([]rune(brand))+len([]rune(t))+3 <= s.Width {
+		gap := s.Width - len([]rune(brand)) - len([]rune(t)) - 2
+		head = brand + strings.Repeat(" ", maxInt(1, gap)) + s.Dim(s.Truncate(t, s.Width-len([]rune(brand))-2))
 	}
-	b.WriteString("\n  " + head + "\n")
-	// Baris identitas. Versi lama memakai deretan panah sebagai pemisah —
-	// dekoratif tanpa informasi, dan di terminal sempit jadi deretan
-	// yang membingungkan. Sekarang isinya justru berguna: apa tool ini dan
-	// siapa yang membuatnya.
-	ident := Tagline + "  " + g.Arrow + "  by " + Author
-	if pad := s.Width - 4 - len([]rune(ident)); pad > 0 {
-		ident += strings.Repeat(" ", pad)
+	b.WriteString("  " + head + "\n")
+	if !compact {
+		b.WriteString("  " + s.Gray(Tagline+"  "+g.Arrow+"  by "+Author) + "\n")
 	}
-	b.WriteString("  " + s.Gray(ident) + "\n\n")
+	b.WriteString("\n")
 
 	// Meta ditulis per-item, bukan string gabungan yang lalu di-wrap.
 	// Kalau digabung dulu, pemenggalan jatuh di tengah frasa — "halaman 1 →"
@@ -77,16 +73,23 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 		s.Dim("bundle") + " " + s.Bold(fmt.Sprint(r.Stats["bundle"])),
 		s.Dim("endpoint") + " " + s.Bold(fmt.Sprint(len(r.Endpoints))),
 	}
+	// Di mode padat, meta dipisah titik saja (bukan panah) supaya muat satu
+	// baris. Panah enak dibaca di terminal lebar, tapi di 56 kolom justru
+	// ia yang memaksa baris jadi dua.
+	sepStr := s.Dim("  " + g.Arrow + "  ")
+	if compact {
+		sepStr = s.Dim(" · ")
+	}
+
 	line, indent := "", "  "
 	for _, m := range meta {
-		// +3: dua spasi + panah + dua spacing
-		if line != "" && len([]rune(line))+len([]rune(m))+3 > s.Width-4 {
+		if line != "" && len([]rune(line))+len([]rune(m))+len([]rune(sepStr)) > s.Width-4 {
 			b.WriteString(indent + line + "\n")
 			line, indent = m, "      "
 			continue
 		}
 		if line != "" {
-			line += s.Dim("  " + g.Arrow + "  ")
+			line += sepStr
 		}
 		line += m
 	}
@@ -113,12 +116,19 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 	if barW < 8 {
 		barW = 8
 	}
-	b.WriteString("  " + s.Bar2(parts, barW) + "\n")
 	var legend []string
 	for _, p := range parts {
 		legend = append(legend, fmt.Sprintf("%s %d", p.Colour(p.Label), p.N))
 	}
-	b.WriteString("  " + s.Gray(strings.Join(legend, "   ")) + "\n")
+	// Legend dan bar digabung kalau bar-nya pendek, supaya hemat satu baris.
+	// Di HP itu perbedaan nyata: satu baris = satu layar fewer di-scroll.
+	legendStr := strings.Join(legend, " ")
+	if barW+len([]rune(legendStr))+3 <= s.Width-4 {
+		b.WriteString("  " + s.Bar2(parts, barW) + "  " + legendStr + "\n")
+	} else {
+		b.WriteString("  " + s.Bar2(parts, barW) + "\n")
+		b.WriteString("  " + legendStr + "\n")
+	}
 
 	// Guard scope: justru kabar baik kalau ada yang ditolak — artinya batasan
 	// benar-benar bekerja, bukan tidak pernah diuji.
@@ -138,7 +148,15 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 	if len(serious) > 0 {
 		b.WriteString("  " + s.Bold("PERLU DILIHAT") + s.Dim("   high + medium") + "\n")
 		b.WriteString("  " + s.Gray(strings.Repeat(g.H, s.Width-4)) + "\n")
-		for _, f := range serious {
+		// Di layar HP, daftar 40 temuan itu tidak pernah dibaca sampai habis —
+		// jadi tampilkan yang paling penting, lalu sebut jumlahnya. Di mode
+		// normal tidak ada batas: kalau lu sedang di depan laptop, lu memang
+		// mau lihat semuanya.
+		shownSerious := serious
+		if compact && len(shownSerious) > 4 {
+			shownSerious = shownSerious[:4]
+		}
+		for _, f := range shownSerious {
 			tag := s.Red("high")
 			if f.Severity == SevMedium {
 				tag = s.Yellow("med ")
@@ -156,6 +174,9 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 			}
 			b.WriteString("\n")
 		}
+		if n := len(serious) - len(shownSerious); n > 0 {
+			b.WriteString("  " + s.Yellow(fmt.Sprintf("  ... %d temuan lain — lihat file JSON", n)) + "\n\n")
+		}
 	}
 
 	// ── path dari bundle ──────────────────────────────────────────────────
@@ -170,7 +191,11 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 		b.WriteString("  " + s.Bold("PATH DARI JS BUNDLE") +
 			s.Dim(fmt.Sprintf("   %d — tidak ada di HTML, hanya di bundle", len(flagged))) + "\n")
 		b.WriteString("  " + s.Gray(strings.Repeat(g.H, s.Width-4)) + "\n")
-		for _, e := range flagged {
+		shown := flagged
+		if compact && len(shown) > 10 {
+			shown = shown[:10]
+		}
+		for _, e := range shown {
 			// Path adalah informasi utama. Di layar sempit, flag disembunyikan
 			// lebih dulu — memotong path berarti menghilangkan informasi,
 			// sementara flag masih bisa dibaca dari file JSON.
@@ -183,9 +208,16 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 			if room < 16 {
 				room = 16
 			}
+			// Padding hanya berguna kalau ada kolom lanjutan (flag). Kalau flag
+			// disembunyikan, menambahkan spasi hanya menghasilkan baris dengan
+			// ekor whitespace yang tidak terlihat tapi tetap ada di file teks.
 			var line string
-			if n := room - len([]rune(e.Path)); n > 0 {
-				line = method + " " + e.Path + strings.Repeat(" ", n)
+			if showFlag {
+				if n := room - len([]rune(e.Path)); n > 0 {
+					line = method + " " + e.Path + strings.Repeat(" ", n)
+				} else {
+					line = method + " " + s.Truncate(e.Path, room)
+				}
 			} else {
 				line = method + " " + s.Truncate(e.Path, room)
 			}
@@ -193,6 +225,9 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 				line += "  " + s.Dim(s.Truncate(strings.Join(e.Flags, " "), 20))
 			}
 			b.WriteString("  " + line + "\n")
+		}
+		if n := len(flagged) - len(shown); n > 0 {
+			b.WriteString("  " + s.Yellow(fmt.Sprintf("  ... %d path lain — buka out/*.json, atau jalankan di terminal lebar", n)) + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -250,20 +285,46 @@ func Render(r Report, s Style, cands []Candidate, cov Coverage) string {
 	// "aman". Tanpa ini, laporan kosong terlihat seperti hasil bersih.
 	b.WriteString("  " + s.Bold("CAKUPAN") + s.Dim("   apa yang dianalisis, dan apa yang TIDAK") + "\n")
 	b.WriteString("  " + s.Gray(strings.Repeat(g.H, s.Width-4)) + "\n")
-	for _, l := range cov.Analysed {
-		b.WriteString("  " + s.Green(g.Dot) + " " + s.Dim("dianalisis   "+l) + "\n")
+	// Cakupan adalah bagian yang WAJIB ada — tanpa itu laporan kosong terlihat
+	// sama dengan laporan bersih. Jadi di mode padat pun tidak dihapus; yang
+	// dipangkas cuma baris pertamanya, karena "[[N] item selengkapnya ada di
+	// JSON]" sudah cukup memberi tahu tanpa memakan layar.
+	analysed, notTested := cov.Analysed, cov.NotTested
+	if compact {
+		if len(analysed) > 2 {
+			analysed = analysed[:2]
+		}
+		if len(notTested) > 3 {
+			notTested = notTested[:3]
+		}
 	}
-	for _, l := range cov.NotTested {
-		b.WriteString("  " + s.Yellow(g.Dot) + " " + s.Dim("TIDAK diuji  "+l) + "\n")
+	for _, l := range analysed {
+		b.WriteString("  " + s.Green(g.Dot) + " " + s.Dim("dianalisis  "+l) + "\n")
 	}
-	for _, l := range cov.Limits {
-		for i, ln := range s.Wrap(l, s.Width-8) {
+	for _, l := range notTested {
+		b.WriteString("  " + s.Yellow(g.Dot) + " " + s.Dim("TIDAK diuji "+l) + "\n")
+	}
+	if compact && (len(cov.Analysed) > len(analysed) || len(cov.NotTested) > len(notTested)) {
+		b.WriteString("  " + s.Dim(fmt.Sprintf("  ... daftar lengkap di file JSON (%d dianalisis, %d tidak diuji)",
+			len(cov.Analysed), len(cov.NotTested))) + "\n")
+	}
+	// Batas hanya ditampilkan ringkas di mode padat; versi lengkap tetap ada
+	// di JSON dan di file teks.
+	limits := cov.Limits
+	if compact {
+		limits = limits[:minInt(2, len(limits))]
+	}
+	for _, l := range limits {
+		for i, ln := range s.Wrap(l, s.Width-10) {
 			if i == 0 {
-				b.WriteString("  " + s.Red(g.Dot) + " " + s.Dim("batas        "+ln) + "\n")
+				b.WriteString("  " + s.Red(g.Dot) + " " + s.Dim("batas       "+ln) + "\n")
 			} else {
-				b.WriteString("              " + s.Dim(ln) + "\n")
+				b.WriteString("             " + s.Dim(ln) + "\n")
 			}
 		}
+	}
+	if compact && len(cov.Limits) > len(limits) {
+		b.WriteString("  " + s.Dim(fmt.Sprintf("  ... %d batas lain — lihat file JSON", len(cov.Limits)-len(limits))) + "\n")
 	}
 	b.WriteString("\n")
 
@@ -314,7 +375,7 @@ func Footer(jsonPath, textPath string, s Style, sarifPath string, withSarif bool
 //
 // Teks yang disimpan SELALU tanpa escape warna: file ini dibaca manusia dan
 // mungkin di-grep, dan karakter ANSI di dalam file cuma jadi sampah.
-func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate, cov Coverage) error {
+func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate, cov Coverage, compact bool) error {
 	if err := Write(jsonPath, r); err != nil {
 		return err
 	}
@@ -328,7 +389,7 @@ func SaveReport(jsonPath, textPath string, r Report, s Style, cands []Candidate,
 	}
 	plain := Plain(s.Unicode)
 	plain.Width = 100
-	return os.WriteFile(textPath, []byte(Render(r, plain, cands, cov)), 0o600)
+	return os.WriteFile(textPath, []byte(Render(r, plain, cands, cov, compact)), 0o600)
 }
 
 // BySeverity mengurutkan temuan dari yang paling serius.
