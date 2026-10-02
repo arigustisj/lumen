@@ -13,7 +13,7 @@ const (
 	Name    = "lumen"
 	Tagline = "pemeta permukaan aplikasi web"
 	Author  = "0xlzy"
-	Version = "0.7.0"
+	Version = "0.8.0"
 )
 
 // Banner mengembalikan satu baris identitas, mis. "lumen 0.3.1 — pemeta

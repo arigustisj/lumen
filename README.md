@@ -499,3 +499,30 @@ lumen -config lumen.yaml -authz -bola=false   # matikan
 **Yang tidak diperiksa:** objek di luar daftar, endpoint tanpa daftar pembuka,
 dan akun yang tidak punya akun uji. Laporan menyatakan ini di bagian cakupan.
 Gagal menemukan BOLA berarti "tidak terbukti pada cakupan ini", bukan "aman".
+
+## Sesi berbasis cookie
+
+Mayoritas aplikasi web tidak memakai header token — mereka memberi cookie
+sesi `HttpOnly` lalu membacanya dari request. Tester yang hanya bisa mengirim
+header akan mendapat hasil yang **salah**: setiap perspektif mendapat respons
+identik, bukan karena otorisasi kuat, tetapi karena tidak ada yang pernah masuk.
+Kesimpulan "auth tidak aktif" yang dihasilkan sangat berbahaya.
+
+```yaml
+tokens:
+  anon:  ""
+  alice: "Cookie: session=abc123; csrf=xyz789"
+  bob:   "Cookie: session=def456; csrf=ghi789"
+```
+
+Nilai diambil dari peramban. Yang ditangani otomatis:
+
+- **Rotasi sesi.** `Set-Cookie` disimpan ke jar per perspektif, jadi cookie
+  yang diganti server tetap berjalan.
+- **CSRF.** Cookie yang namanya mengandung `csrf`/`xsrf` diteruskan ke
+  `X-CSRF-Token` dan `X-XSRF-TOKEN`. Tanpa ini setiap request kena 403 — dan
+  403 itu akan dibaca sebagai "guard bekerja", yaitu kesimpulan yang benar
+  secara harfiah dan salah secara substansi.
+
+Setiap perspektif punya jar sendiri. Jika satu jar dipakai bersama, request
+"bob" bisa membawa cookie "alice" dan seluruh perbandingan kehilangan makna.

@@ -167,6 +167,9 @@ func idValue(v any) (string, bool) {
 func ProbeOwnership(ctx context.Context, client *http.Client, target Target,
 	eps []Endpoint, owner, intruder string, delay time.Duration) OwnerReport {
 
+	pers := []string{owner, intruder}
+	cl := NewClients(target, pers, client)
+
 	rep := OwnerReport{
 		Target: target.URL,
 		Pairs:  []string{owner + " -> " + intruder},
@@ -198,11 +201,11 @@ func ProbeOwnership(ctx context.Context, client *http.Client, target Target,
 		sleep(delay)
 
 		// 1. Daftar milik pemilik.
-		ownerView := fetchView(ctx, client, target, list, owner)
+		ownerView := fetchView(ctx, cl.For(owner), target, list, owner)
 		if ownerView.Error != "" || ownerView.Status < 200 || ownerView.Status >= 300 {
 			continue
 		}
-		bodyOwner, err := fetchBody(ctx, client, target, list, owner)
+		bodyOwner, err := fetchBody(ctx, cl.For(owner), target, list, owner)
 		if err != nil {
 			continue
 		}
@@ -227,7 +230,7 @@ func ProbeOwnership(ctx context.Context, client *http.Client, target Target,
 			swap := OwnerSwap{ObjectID: id, ListPath: list, Owner: owner, Intruder: intruder}
 
 			// 2. Pemilik membaca objeknya sendiri.
-			ownView := fetchView(ctx, client, target, objPath, owner)
+			ownView := fetchView(ctx, cl.For(owner), target, objPath, owner)
 			swap.OwnerCode = ownView.Status
 			swap.OwnerHash = ownView.Hash
 			if ownView.Status < 200 || ownView.Status >= 300 || ownView.Error != "" {
@@ -239,7 +242,7 @@ func ProbeOwnership(ctx context.Context, client *http.Client, target Target,
 			}
 
 			// 3. Orang lain mencoba membaca objek yang sama.
-			intView := fetchView(ctx, client, target, objPath, intruder)
+			intView := fetchView(ctx, cl.For(intruder), target, objPath, intruder)
 			swap.SwapCode = intView.Status
 			swap.SwapHash = intView.Hash
 
@@ -313,9 +316,13 @@ func fetchBody(ctx context.Context, client *http.Client, target Target, path, pe
 		return nil, err
 	}
 	for k, hv := range target.HeaderFor(pers) {
+		if strings.EqualFold(k, "Cookie") {
+			continue
+		}
 		req.Header.Set(k, hv)
 	}
 	req.Header.Set("Accept-Encoding", "identity")
+	WithCSRF(client, req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

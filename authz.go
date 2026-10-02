@@ -146,6 +146,14 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 
 	order := append([]string{rep.Baseline}, opts.Compare...)
 
+	// Satu client per perspektif, masing-masing dengan cookie jar sendiri.
+	//
+	// Ini bukan detail kecil. Dengan satu client bersama, session milik satu
+	// perspektif bisa terbawa ke request perspektif lain, dan seluruh
+	// perbandingan kehilangan makna — yang tersisa hanyalah "dua request
+	// yang sama dengan cookie yang sama".
+	cl := NewClients(target, order, client)
+
 	// Hash halaman root jadi penanda "shell SPA".
 	//
 	// SPA modern hampir selalu mengembalikan index.html yang sama untuk
@@ -156,7 +164,7 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 	// Pyaratnya diperiksa sebelum fetch, bukan sesudahnya — dalam Go,
 	// fetchView akan dipanggil wszystkie, apa pun nilai syaratnya.
 	if !opts.NoShellProbe {
-		if root := fetchView(ctx, client, target, "/", rep.Baseline); root.Hash != "" && root.Error == "" {
+		if root := fetchView(ctx, cl.For(rep.Baseline), target, "/", rep.Baseline); root.Hash != "" && root.Error == "" {
 			rep.ShellHash = root.Hash
 			rep.ShellLength = root.Length
 		}
@@ -168,7 +176,7 @@ func RunAuthz(ctx context.Context, client *http.Client, target Target, endpoints
 		}
 		res := AuthzResult{Path: p, Views: map[string]View{}, Sensitive: isSensitivePath(p)}
 		for _, pers := range order {
-			res.Views[pers] = fetchView(ctx, client, target, p, pers)
+			res.Views[pers] = fetchView(ctx, cl.For(pers), target, p, pers)
 			if opts.DelayMS > 0 {
 				select {
 				case <-ctx.Done():
@@ -344,10 +352,17 @@ func fetchView(ctx context.Context, client *http.Client, target Target, path, pe
 		return v
 	}
 	for k, hv := range target.HeaderFor(pers) {
+		// Cookie tidak dikirim sebagai header di sini. Ia sudah hidup di jar
+		// milik perspektif itu, dan mengirimkannya dua kali bisa membuat
+		// server melihat dua header Cookie dengan nilai berbeda.
+		if strings.EqualFold(k, "Cookie") {
+			continue
+		}
 		req.Header.Set(k, hv)
 	}
 	// Minta respons apa adanya, tanpa kompresi: yang dibandingkan adalah byte.
 	req.Header.Set("Accept-Encoding", "identity")
+	WithCSRF(client, req)
 
 	started := time.Now()
 	resp, err := client.Do(req)
