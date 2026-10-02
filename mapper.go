@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -35,6 +36,14 @@ type MapperConfig struct {
 	Conc    int
 	Delay   time.Duration
 	MaxBody int
+	// DialContext, kalau diisi, menggantikan membuat koneksi. Dipakai untuk scan
+	// yang memakai IP hasil preflight DNS supaya resolver yang memblokir
+	// tidak dipakai lagi di tengah scan.
+	//
+	// Hook, bukan http.Client penuh, karena CheckRedirect milik mapper
+	// („jangan keluar scope") harus tetap berlaku. Client dari pemanggil
+	// bisa saja tidak punya guard itu.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type Mapper struct {
@@ -71,9 +80,6 @@ func (m *Mapper) RootError() string {
 	return m.rootErr
 }
 
-// IsRoot menandai URL sebagai titik awal pemetaan.
-func (m *Mapper) IsRoot(u string) bool { return u == m.cfg.Target.String() || u == m.cfg.Target.Host }
-
 func NewMapper(cfg MapperConfig) *Mapper {
 	if cfg.Conc < 1 {
 		cfg.Conc = 4
@@ -94,8 +100,13 @@ func NewMapper(cfg MapperConfig) *Mapper {
 		stats:     map[string]int{},
 		endpoints: map[string]Endpoint{},
 	}
+	transport := &http.Transport{}
+	if cfg.DialContext != nil {
+		transport.DialContext = cfg.DialContext
+	}
 	m.http = &http.Client{
-		Timeout: 25 * time.Second,
+		Timeout:   25 * time.Second,
+		Transport: transport,
 		// Redirect boleh, tapi tidak keluar scope. Tanpa guard di sini,
 		// satu 302 ke pihak ketiga sudah cukup untuk keluar dari target.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

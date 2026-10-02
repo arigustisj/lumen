@@ -13,7 +13,7 @@ const (
 	Name    = "lumen"
 	Tagline = "pemeta permukaan aplikasi web"
 	Author  = "0xlzy"
-	Version = "0.3.2"
+	Version = "0.3.3"
 )
 
 // Banner mengembalikan satu baris identitas, mis. "lumen 0.3.1 — pemeta
@@ -96,6 +96,10 @@ type Report struct {
 	// RootError mengisi kalau halaman awal gagal diambil. Wajib ada supaya
 	// laporan kosong bisa dibedakan dari laporan yang gagal.
 	RootError string `json:"root_error,omitempty"`
+	// DNSNote mencatat resolver mana yang dipakai. Wajib ada kalau ada
+	// fallback: hasil scan yang memakai resolver berbeda tidak sepenuhnya
+	// setara dengan scan memakai DNS perangkat, dan itu perlu diketahui.
+	DNSNote string `json:"dns_note,omitempty"`
 	// Authz menyimpan hasil perbandingan akses. Hanya ada kalau pemeriksaan
 	// diferensial dijalankan.
 	Authz *AuthzReport `json:"authz,omitempty"`

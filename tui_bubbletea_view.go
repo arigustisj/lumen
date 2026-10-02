@@ -81,43 +81,50 @@ func (m *TUIModel) viewFooter() string {
 	if m.phase != PhaseDone {
 		hints = "memindai… · q keluar"
 	}
-	st := stDim
-	if m.phase == PhaseDone {
-		st = lipgloss.NewStyle().Foreground(cLow)
-		hints += " · r scan ulang"
-	}
+
+	// Catatan DNS menggantikan daftar pintasan kalau resolver publik dipakai.
+	// Hasil scan yang memakai resolver berbeda tidak sepenuhnya setara dengan
+	// scan memakai DNS perangkat, dan pembaca laporan perlu tahu itu.
 	leftText := " " + hints
+	if m.phase == PhaseDone && m.rep != nil && m.rep.DNSNote != "" {
+		leftText = " " + m.rep.DNSNote
+	}
+
 	rightText := ""
 	if m.phase == PhaseDone && m.rep != nil {
 		rightText = fmt.Sprintf("%d endpoint · %d temuan", len(m.rep.Endpoints), len(m.rep.Findings))
 	}
 
-	// Salah satu dari dua sisi boleh dipotong, tapi tidak boleh keduanya
-	// hilang: kalau tidak muat, angka ringkasan yang hilang lebihemdalam
-	// comparado daftar pintasan.
+	// Satu sisi boleh dipotong, tapi tidak boleh keduanya hilang: angka
+	// ringkasan yang hilang lebihsalt BSo dari daftar pintasan.
 	rightW := 0
 	if rightText != "" {
 		rightW = lipgloss.Width(rightText) + 1
 	}
-	if leftW := lipgloss.Width(leftText); leftW+rightW > m.width {
+	if lipgloss.Width(leftText)+rightW > m.width {
 		room := m.width - rightW
-		if room < 6 {
+		if room < 8 {
+			// Tidak ada ruang untuk keduanya: tampilkan angka saja.
+			rightText, rightW = "", 0
 			room = m.width
-			rightText = ""
-			rightW = 0
 		}
 		leftText = truncRight(leftText, room)
+	}
+
+	st := stDim
+	if m.phase == PhaseDone {
+		st = lipgloss.NewStyle().Foreground(cLow)
 	}
 	left := st.Render(leftText)
 	if rightText == "" {
 		return left
 	}
 	right := lipgloss.NewStyle().Foreground(cDim).Render(rightText)
-	w := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if w < 1 {
-		w = 1
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
 	}
-	return left + strings.Repeat(" ", w) + right
+	return left + strings.Repeat(" ", gap) + right
 }
 
 // viewBody menghasilkan rail navigasi + konten, atau spinner kalau masih

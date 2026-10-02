@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -64,6 +65,7 @@ func main() {
 		runAuthz    = flag.Bool("authz", false, "pemeriksaan otorisasi diferensial (butuh config + token)")
 		tuiMode     = flag.Bool("tui", false, "dashboard interaktif")
 		tuiDisabled = flag.Bool("no-tui", false, "paksa output teks biasa, tanpa dashboard")
+		noDNSFix    = flag.Bool("no-dns-fallback", false, "jangan mencoba resolver publik saat DNS perangkat memblokir")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -167,7 +169,37 @@ func main() {
 		jobCtx, jobCancel := context.WithTimeout(context.Background(), *timeout)
 		start := time.Now()
 
-		m := lumen.NewMapper(lumen.MapperConfig{Target: u, Conc: *conc, Delay: *delay})
+		// Preflight DNS. Di HP, Android dan beberapa operator membalas
+		// alamat loopback untuk domain yang diblokir. Gejalanya seperti
+		// server menolak koneksi, padahal tidak ada yang sampai ke server.
+		// Kalau sistem mengembalikan loopback, coba resolver publik lalu
+		// pin IP-nya supaya DNS tidak dicek lagi di tengah scan.
+		dial := (*lumen.PinnedDialer)(nil)
+		dnsNote := ""
+		if !*noDNSFix {
+			host := u.Hostname()
+			port := u.Port()
+			if port == "" {
+				port = map[bool]string{true: "443", false: "80"}[u.Scheme == "https"]
+			}
+			dres, err := lumen.PreflightDNS(jobCtx, host)
+			if err != "" && len(dres.IPs) == 0 {
+				// Semua resolver gagal: tetap coba scan dengan DNS sistem
+				// supaya laporan tetap menunjukkan pesan error aslinya.
+				dnsNote = err
+			} else if dres.Fallback && len(dres.IPs) > 0 {
+				dial = lumen.NewPinnedDialer(host, dres.IPs[0], port)
+				dnsNote = "DNS perangkat memblokir; scan memakai " + dres.Used + " → " + dres.IPs[0]
+			} else if dres.Used == "sistem" && !*quiet {
+				dnsNote = "DNS: " + strings.Join(dres.IPs, ", ")
+			}
+		}
+
+		mcfg := lumen.MapperConfig{Target: u, Conc: *conc, Delay: *delay}
+		if dial != nil {
+			mcfg.DialContext = dial.DialContext
+		}
+		m := lumen.NewMapper(mcfg)
 		m.Run(jobCtx)
 		pages, eps, findings, stats := m.Snapshot()
 
@@ -188,6 +220,7 @@ func main() {
 			Findings:    findings,
 			ScopeDenied: m.Scope().Denied(),
 			RootError:   m.RootError(),
+			DNSNote:     dnsNote,
 			Stats:       stats,
 			Candidates:  cands,
 			Coverage:    cov,
