@@ -1,3 +1,3 @@
-module lumen
+module github.com/0xlzy-sam/lumen
 
-go 1.25.0
+go 1.25

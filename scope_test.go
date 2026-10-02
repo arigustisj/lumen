@@ -1,4 +1,4 @@
-package scope
+package lumen
 
 import (
 	"net/url"
@@ -14,7 +14,7 @@ import (
 // diaudit, bukan terjadi diam-diam.
 func TestGuardMenolakHostLain(t *testing.T) {
 	base, _ := url.Parse("https://staging.kita.test/app")
-	s := New(base)
+	s := NewScope(base)
 
 	//roads yang boleh
 	for _, ok := range []string{
@@ -55,11 +55,11 @@ func TestGuardMenolakHostLain(t *testing.T) {
 
 func TestPortDefaultDisesuaikanSkema(t *testing.T) {
 	https, _ := url.Parse("https://a.test/")
-	if s := New(https); s.host != "a.test" || s.port != "443" {
+	if s := NewScope(https); s.host != "a.test" || s.port != "443" {
 		t.Errorf("https → host=%q port=%q, mau a.test/443", s.host, s.port)
 	}
 	plain, _ := url.Parse("http://a.test/")
-	if s := New(plain); s.host != "a.test" || s.port != "80" {
+	if s := NewScope(plain); s.host != "a.test" || s.port != "80" {
 		t.Errorf("http → host=%q port=%q, mau a.test/80", s.host, s.port)
 	}
 }

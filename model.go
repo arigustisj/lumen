@@ -2,9 +2,25 @@
 //
 // Dipisah dari logika supaya output JSON punya satu sumber kebenaran: kalau
 // field berubah di sini, semua layer ikut berubah.
-package model
+package lumen
 
 import "time"
+
+// Brand — penanda pembuat. Dipakai di header output, -version, dan banner
+// binary supaya jelas dari mana tool ini, dan supaya ada yangrostik
+// accountable kalau nanti dipakai orang lain.
+const (
+	Name    = "lumen"
+	Tagline = "pemeta permukaan aplikasi web"
+	Author  = "0xlzy"
+	Version = "0.1.0"
+)
+
+// Banner mengembalikan satu baris identitas, mis. "lumen 0.1.0 — pemeta
+// permukaan aplikasi web · by 0xlzy".
+func Banner() string {
+	return Name + " " + Version + " · " + Tagline + " · by " + Author
+}
 
 // Severity adalah tingkat seriousness temuan.
 type Severity string
@@ -69,4 +85,12 @@ type Report struct {
 	Findings    []Finding      `json:"findings"`
 	ScopeDenied []string       `json:"scope_denied,omitempty"`
 	Stats       map[string]int `json:"stats"`
+
+	// Candidates adalah kandidat kerentanan berdasarkan OWASP, lengkap
+	// dengan langkah verifikasi. Wajib ada di JSON — output terminal cuma
+	// ringkasan, sedangkan bagian yang menentukanXx tindakan ada di sini.
+	Candidates []Candidate `json:"candidates,omitempty"`
+	// Coverage menyatakan apa yang tidak diuji. Tanpa ini, laporan kosong
+	// terlihat sama dengan laporan yang bersih.
+	Coverage Coverage `json:"coverage"`
 }

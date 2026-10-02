@@ -5,7 +5,7 @@
 // DELETE — jadi tidak ada perubahan state di server, sekecil apa pun.
 // Kalau sebuah endpoint ternyata butuh metode lain untuk diuji, itu
 // keputusan manusia, bukan keputusan tool.
-package probe
+package lumen
 
 import (
 	"context"
@@ -16,30 +16,26 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"lumen/internal/extract"
-	"lumen/internal/mapper"
-	"lumen/internal/model"
 )
 
 // Options mengatur parameter probe.
-type Options struct {
+type ProbeOptions struct {
 	Conc int
 }
 
-// Run memeriksa endpoint hasil ekstraksi JS dan menandai yang merespons
+// ProbeEndpoints memeriksa endpoint hasil ekstraksi JS dan menandai yang merespons
 // tanpa autentikasi. Respons 2xx pada endpoint yang seharusnya tertutup
 // adalah temuan paling berharga di seluruh alur ini, jadi diberi severity tinggi.
-func Run(ctx context.Context, m *mapper.Mapper, eps []model.Endpoint, opts Options) []model.Endpoint {
+func ProbeEndpoints(ctx context.Context, m *Mapper, eps []Endpoint, opts ProbeOptions) []Endpoint {
 	if opts.Conc < 1 {
 		opts.Conc = 4
 	}
 
 	// Hanya endpoint dari bundle: path dari <a href> sudah jelas ada
 	// atau tidak, dan memverifikasinya hanya menambah beban tanpa informasi baru.
-	candidates := make([]model.Endpoint, 0, len(eps))
+	candidates := make([]Endpoint, 0, len(eps))
 	for _, e := range eps {
-		if e.Origin == model.OriginJS && e.Path != "" && strings.HasPrefix(e.Path, "/") {
+		if e.Origin == OriginJS && e.Path != "" && strings.HasPrefix(e.Path, "/") {
 			candidates = append(candidates, e)
 		}
 	}
@@ -51,7 +47,7 @@ func Run(ctx context.Context, m *mapper.Mapper, eps []model.Endpoint, opts Optio
 	base := m.Target()
 
 	for _, e := range candidates {
-		abs, ok := extract.AbsResolve(base.String(), e.Path)
+		abs, ok := AbsResolve(base.String(), e.Path)
 		if !ok {
 			continue
 		}
@@ -62,7 +58,7 @@ func Run(ctx context.Context, m *mapper.Mapper, eps []model.Endpoint, opts Optio
 
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(e model.Endpoint, abs string) {
+		go func(e Endpoint, abs string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -102,7 +98,7 @@ func Run(ctx context.Context, m *mapper.Mapper, eps []model.Endpoint, opts Optio
 			}
 			mu.Lock()
 			e.Status = resp.StatusCode
-			e.Origin = model.OriginProbe
+			e.Origin = OriginProbe
 			e.Flags = append(e.Flags, flags...)
 			mu.Unlock()
 		}(e, abs)
@@ -131,11 +127,11 @@ func classify(resp *http.Response) []string {
 }
 
 // Severity memberi bobot pada flag — dipakai untuk urutan laporan.
-func Severity(flags []string) model.Severity {
+func FlagSeverity(flags []string) Severity {
 	for _, f := range flags {
 		if strings.Contains(f, "AKSES-TANPA-AUTH") || strings.HasPrefix(f, "cors-") {
-			return model.SevHigh
+			return SevHigh
 		}
 	}
-	return model.SevInfo
+	return SevInfo
 }

@@ -4,7 +4,7 @@
 // CDN, font host, telemetri, dan domain pihak ketiga yang根本不 kita otorisasi.
 // Guard di sini membuat Violasi terlihat di laporan (ScopeDenied) alih-alih
 // terjadi diam-diam.
-package scope
+package lumen
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ type Scope struct {
 	denied map[string]int // host → berapa kali ditolak
 }
 
-func New(u *url.URL) *Scope {
+func NewScope(u *url.URL) *Scope {
 	port := u.Port()
 	if port == "" {
 		if u.Scheme == "https" {

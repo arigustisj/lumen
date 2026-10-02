@@ -18,6 +18,8 @@
 package main
 
 import (
+	lumen "github.com/0xlzy-sam/lumen"
+
 	"context"
 	"flag"
 	"fmt"
@@ -28,31 +30,34 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
-
-	"lumen/internal/mapper"
-	"lumen/internal/model"
-	"lumen/internal/probe"
-	"lumen/internal/report"
 )
-
-const version = "0.1.0"
 
 func main() {
 	log.SetFlags(0)
 
 	var (
-		target  = flag.String("target", "", "URL target, contoh https://staging.example.com")
-		outDir  = flag.String("out", "out", "direktori output")
-		stem    = flag.String("name", "", "nama file output tanpa ekstensi (default: dari host target)")
-		conc    = flag.Int("conc", 4, "request paralel")
-		delay   = flag.Duration("delay", 250*time.Millisecond, "jeda minimal antar request")
-		doProbe = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS (OPTIONS saja)")
-		timeout = flag.Duration("timeout", 3*time.Minute, "batas waktu total")
-		quiet   = flag.Bool("quiet", false, "hanya cetak ringkasan singkat")
+		target   = flag.String("target", "", "URL target, contoh https://staging.example.com")
+		outDir   = flag.String("out", "out", "direktori output")
+		stem     = flag.String("name", "", "nama file output tanpa ekstensi (default: dari host target)")
+		conc     = flag.Int("conc", 4, "request paralel")
+		delay    = flag.Duration("delay", 250*time.Millisecond, "jeda minimal antar request")
+		doProbe  = flag.Bool("probe", true, "verifikasi endpoint hasil ekstraksi JS (OPTIONS saja)")
+		timeout  = flag.Duration("timeout", 3*time.Minute, "batas waktu total")
+		quiet    = flag.Bool("quiet", false, "hanya cetak ringkasan singkat")
+		noCol    = flag.Bool("no-color", false, "matikan warna (default: autodeteksi terminal)")
+		ascii    = flag.Bool("ascii", false, "pakai karakter ASCII, bukan unicode")
+		width    = flag.Int("width", 0, "lebar output kolom; 0 = autodeteksi (berguna di Termux)")
+		showVer  = flag.Bool("version", false, "tampilkan versi lalu keluar")
+		sarif    = flag.Bool("sarif", true, "tulis findings.sarif (SARIF 2.1.0) untuk CI/code scanning")
+		exitZero = flag.Bool("exit-zero", false, "selalu keluar dengan kode 0 (untuk pemakaian manual)")
 	)
 	flag.Usage = usage
 	flag.Parse()
 
+	if *showVer {
+		fmt.Println(lumen.Banner())
+		return
+	}
 	if *target == "" {
 		flag.Usage()
 		os.Exit(2)
@@ -66,6 +71,20 @@ func main() {
 		log.Fatalf("scheme harus http atau https, dapat %q", u.Scheme)
 	}
 
+	// Gaya tampilan ditentukan sekali, di sini, lalu diteruskan ke report.
+	// Deteksi otomatis: di Termux stdout bukan TTY saat di-pipe, jadi warna
+	// mati sendiri — dan LUMEN_COLOR=always menghidupkannya lagi.
+	style := lumen.DetectStyle(os.Stdout)
+	if *noCol || os.Getenv("NO_COLOR") != "" {
+		style.Color = false
+	}
+	if *ascii {
+		style.Unicode = false
+	}
+	if *width > 0 {
+		style.Width = *width
+	}
+
 	host := u.Hostname()
 	name := *stem
 	if name == "" {
@@ -73,11 +92,6 @@ func main() {
 	}
 
 	if !*quiet {
-		fmt.Printf("lumen %s\n", version)
-		fmt.Printf("target   : %s\n", u.String())
-		fmt.Printf("delay    : %s (konservatif by design)\n", *delay)
-		fmt.Printf("probe    : %v (OPTIONS saja, tanpa perubahan state)\n", *doProbe)
-		fmt.Printf("output   : %s\n\n", filepath.Join(*outDir, name))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -94,7 +108,7 @@ func main() {
 	}()
 
 	start := time.Now()
-	m := mapper.New(mapper.Config{
+	m := lumen.NewMapper(lumen.MapperConfig{
 		Target: u, Conc: *conc, Delay: *delay,
 	})
 	m.Run(ctx)
@@ -102,9 +116,9 @@ func main() {
 	pages, eps, findings, stats := m.Snapshot()
 
 	if *doProbe {
-		probed := probe.Run(ctx, m, eps, probe.Options{Conc: *conc})
+		probed := lumen.ProbeEndpoints(ctx, m, eps, lumen.ProbeOptions{Conc: *conc})
 		// gabungkan status/flag dari probe ke endpoint asal
-		byKey := map[string]model.Endpoint{}
+		byKey := map[string]lumen.Endpoint{}
 		for _, e := range eps {
 			byKey[e.Method+" "+e.Path] = e
 		}
@@ -125,18 +139,25 @@ func main() {
 			if len(e.Flags) == 0 {
 				continue
 			}
-			findings = append(findings, model.Finding{
+			findings = append(findings, lumen.Finding{
 				Kind:     "endpoint",
-				Severity: probe.Severity(e.Flags),
+				Severity: lumen.FlagSeverity(e.Flags),
 				Where:    e.Path,
 				Detail:   fmt.Sprintf("%s -> %d %v", e.Method, e.Status, e.Flags),
 			})
 		}
 	}
 
-	findings = report.BySeverity(findings)
+	findings = lumen.BySeverity(findings)
 
-	rep := model.Report{
+	// Kandidat OWASP + cakupan. Klasifikasi memakai sinyal statis, jadi
+	// hasilnya sengaja disebut kandidat dan selalu disertai langkah
+	// verifikasi — bukan "temuan terbukti".
+	cands := lumen.Classify(eps, findings)
+	cov := lumen.BuildCoverage(lumen.Report{Stats: stats})
+
+	code := lumen.ExitCode(lumen.Report{Stats: stats}, cands)
+	rep := lumen.Report{
 		Target:      u.String(),
 		GeneratedAt: time.Now().UTC(),
 		DurationMS:  time.Since(start).Milliseconds(),
@@ -145,26 +166,49 @@ func main() {
 		Findings:    findings,
 		ScopeDenied: m.Scope().Denied(),
 		Stats:       stats,
+		Candidates:  cands,
+		Coverage:    cov,
 	}
 
 	jsonPath := filepath.Join(*outDir, name+".json")
 	textPath := filepath.Join(*outDir, name+".txt")
-	if err := report.Save(jsonPath, textPath, rep); err != nil {
+	if err := lumen.SaveReport(jsonPath, textPath, rep, style, cands, cov); err != nil {
 		log.Fatalf("gagal menulis laporan: %v", err)
 	}
 
-	fmt.Print(report.Summary(rep))
-	fmt.Printf("\noutput   : %s\n", jsonPath)
-	fmt.Printf("          %s\n", textPath)
+	// SARIF 2.1.0: format yang sudah dipahami GitHub code scanning, GitLab,
+	// dan sebagian besar pipeline. Tanpa ini setiap adopter harus menulis
+	// parser sendiri — dan pada praktiknya tidak ada yang mau.
+	sarifPath := filepath.Join(*outDir, name+".sarif")
+	if *sarif {
+		if err := lumen.WriteSARIF(sarifPath, lumen.BuildSARIF(rep, cands, cov, code)); err != nil {
+			log.Fatalf("gagal menulis SARIF: %v", err)
+		}
+	}
+
+	fmt.Print(lumen.Render(rep, style, cands, cov))
+	fmt.Print(lumen.Footer(jsonPath, textPath, style, sarifPath, *sarif))
+
+	// Exit code hanya berarti kalau aman dipakai di pipeline; kalau human
+	// yang menjalankan dari terminal, keluar dengan kode bukan error
+	// membingungkan.
+	if *exitZero {
+		return
+	}
+	os.Exit(code)
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `lumen %s — pemeta permukaan aplikasi web untuk review keamanan
+	fmt.Fprintf(os.Stderr, `%s
+
+Pemeta permukaan aplikasi web untuk review keamanan, dengan fokus pada SPA
+di mana rute API tidak ada di HTML.
 
 Pakai:
   lumen -target https://app.example.com
   lumen -target https://app.example.com -probe=false -delay 500ms
   lumen -target https://app.example.com -delay 1s -conc 2   # lebih konservatif
+  lumen -version
 
 Hanya GET dan OPTIONS yang dikirim — tidak ada metode yang mengubah state.
 Guard scope memblokir host di luar target dan mencatat penolakannya di laporan,
@@ -174,7 +218,12 @@ Alat ini tidak menyimpulkan kerentanan. Dia menunjuk hal yang menarik —
 endpoint yang tidak ada di HTML, header yang hilang, kredensial yang ikut
 ter-commit ke bundle. Penilaian tetap milik manusia.
 
-`, version)
+Opsi tampilan:
+  -no-color            matikan warna (default: autodeteksi terminal)
+  -ascii               karakter ASCII, bukan unicode
+  -width N             lebar kolom; 0 = autodeteksi. Berguna di Termux.
+
+`, lumen.Banner())
 	flag.PrintDefaults()
 }
 

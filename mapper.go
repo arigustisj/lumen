@@ -3,7 +3,7 @@
 // Semua request outbound WAJIB lewat sc.Limiter dan di-check sc.Scope lebih
 // dulu. Kalau ada satu jalur yang melewatkan salah satu dari keduanya, seluruh
 // jaminan "hanya menyentuh satu host" jadi tidak berlaku.
-package mapper
+package lumen
 
 import (
 	"context"
@@ -17,10 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"lumen/internal/extract"
-	"lumen/internal/model"
-	"lumen/internal/scope"
 )
 
 const (
@@ -34,7 +30,7 @@ const (
 )
 
 // Config adalah parameter crawler.
-type Config struct {
+type MapperConfig struct {
 	Target  *url.URL
 	Conc    int
 	Delay   time.Duration
@@ -42,9 +38,9 @@ type Config struct {
 }
 
 type Mapper struct {
-	sc   *scope.Scope
-	lim  *scope.Limiter
-	cfg  Config
+	sc   *Scope
+	lim  *Limiter
+	cfg  MapperConfig
 	http *http.Client
 
 	queue chan string
@@ -54,12 +50,12 @@ type Mapper struct {
 	seen      map[string]bool
 	jsSeen    map[string]bool
 	stats     map[string]int
-	pages     []model.Page
-	endpoints map[string]model.Endpoint
-	findings  []model.Finding
+	pages     []Page
+	endpoints map[string]Endpoint
+	findings  []Finding
 }
 
-func New(cfg Config) *Mapper {
+func NewMapper(cfg MapperConfig) *Mapper {
 	if cfg.Conc < 1 {
 		cfg.Conc = 4
 	}
@@ -70,14 +66,14 @@ func New(cfg Config) *Mapper {
 		cfg.MaxBody = maxBodyBytes
 	}
 	m := &Mapper{
-		sc:        scope.New(cfg.Target),
-		lim:       scope.NewLimiter(cfg.Delay),
+		sc:        NewScope(cfg.Target),
+		lim:       NewLimiter(cfg.Delay),
 		cfg:       cfg,
 		queue:     make(chan string, maxPages*2),
 		seen:      map[string]bool{},
 		jsSeen:    map[string]bool{},
 		stats:     map[string]int{},
-		endpoints: map[string]model.Endpoint{},
+		endpoints: map[string]Endpoint{},
 	}
 	m.http = &http.Client{
 		Timeout: 25 * time.Second,
@@ -102,15 +98,15 @@ func (m *Mapper) bump(k string) {
 	m.mu.Unlock()
 }
 
-func (m *Mapper) finding(kind string, sev model.Severity, where, detail string) {
+func (m *Mapper) finding(kind string, sev Severity, where, detail string) {
 	m.mu.Lock()
-	m.findings = append(m.findings, model.Finding{
+	m.findings = append(m.findings, Finding{
 		Kind: kind, Severity: sev, Where: where, Detail: detail,
 	})
 	m.mu.Unlock()
 }
 
-func (m *Mapper) endpoint(e model.Endpoint) {
+func (m *Mapper) endpoint(e Endpoint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := e.Method + " " + e.Path
@@ -120,9 +116,9 @@ func (m *Mapper) endpoint(e model.Endpoint) {
 }
 
 // Scope exposes guard supaya caller bisa reuse untuk probing.
-func (m *Mapper) Scope() *scope.Scope { return m.sc }
+func (m *Mapper) Scope() *Scope { return m.sc }
 
-func (m *Mapper) Limiter() *scope.Limiter { return m.lim }
+func (m *Mapper) Limiter() *Limiter { return m.lim }
 
 func (m *Mapper) Target() *url.URL { return m.cfg.Target }
 
@@ -132,7 +128,7 @@ func (m *Mapper) Target() *url.URL { return m.cfg.Target }
 // tertentu: crawler yang berhenti tepat di tengah hanya menghasilkan laporan
 // yang terlihat lengkap padahal belum.
 func (m *Mapper) Run(ctx context.Context) {
-	start := extract.Canonical(m.cfg.Target.String())
+	start := Canonical(m.cfg.Target.String())
 	m.markSeen(start)
 	m.enqueue(start)
 
@@ -191,29 +187,29 @@ func (m *Mapper) crawlOne(ctx context.Context, raw string) {
 	code, body, hdr, err := m.get(ctx, raw)
 	if err != nil {
 		m.bump("error")
-		m.finding("error", model.SevInfo, raw, "gagal diambil: "+err.Error())
+		m.finding("error", SevInfo, raw, "gagal diambil: "+err.Error())
 		return
 	}
 	m.bump("crawled")
 
 	ct := hdr.Get("Content-Type")
 	isHTML := strings.Contains(ct, "text/html")
-	pg := model.Page{
+	pg := Page{
 		URL: raw, Status: code, ContentLen: len(body), IsHTML: isHTML,
-		Title: extract.Title(body),
+		Title: Title(body),
 	}
 
 	m.checkHeaders(&pg, hdr, raw)
 	m.checkCookies(&pg, hdr, raw)
 
-	pg.QueryKeys = extract.QueryKeys(raw)
+	pg.QueryKeys = QueryKeys(raw)
 	if len(pg.QueryKeys) > 0 {
-		m.finding("query", model.SevLow, raw,
+		m.finding("query", SevLow, raw,
 			"query param: "+strings.Join(pg.QueryKeys, ", "))
 	}
-	pg.FormFields = extract.FormFields(body)
+	pg.FormFields = FormFields(body)
 	if len(pg.FormFields) > 0 {
-		m.finding("form", model.SevInfo, raw,
+		m.finding("form", SevInfo, raw,
 			"form field: "+strings.Join(pg.FormFields, ", "))
 	}
 
@@ -221,16 +217,16 @@ func (m *Mapper) crawlOne(ctx context.Context, raw string) {
 	m.pages = append(m.pages, pg)
 	m.mu.Unlock()
 
-	m.endpoint(model.Endpoint{
-		Method: "GET", Path: raw, Origin: model.OriginHTML,
+	m.endpoint(Endpoint{
+		Method: "GET", Path: raw, Origin: OriginHTML,
 		Status: code, Title: pg.Title,
 	})
 
 	if !isHTML {
 		return
 	}
-	for _, fw := range extract.DetectFramework(body) {
-		m.finding("tech", model.SevInfo, raw, "framework: "+fw)
+	for _, fw := range DetectFramework(body) {
+		m.finding("tech", SevInfo, raw, "framework: "+fw)
 	}
 	m.followLinks(raw, body)
 	m.followScripts(ctx, raw, body)
@@ -238,8 +234,8 @@ func (m *Mapper) crawlOne(ctx context.Context, raw string) {
 }
 
 func (m *Mapper) followLinks(page, body string) {
-	for _, l := range extract.Links(body) {
-		abs, ok := extract.AbsResolve(page, l)
+	for _, l := range Links(body) {
+		abs, ok := AbsResolve(page, l)
 		if !ok {
 			continue
 		}
@@ -247,7 +243,7 @@ func (m *Mapper) followLinks(page, body string) {
 		if err != nil || !m.sc.Allows(u) {
 			continue
 		}
-		abs = extract.Canonical(abs)
+		abs = Canonical(abs)
 		if !m.markSeen(abs) {
 			continue
 		}
@@ -256,8 +252,8 @@ func (m *Mapper) followLinks(page, body string) {
 }
 
 func (m *Mapper) followScripts(ctx context.Context, page, body string) {
-	for _, s := range extract.Scripts(body) {
-		abs, ok := extract.AbsResolve(page, s)
+	for _, s := range Scripts(body) {
+		abs, ok := AbsResolve(page, s)
 		if !ok {
 			continue
 		}
@@ -288,57 +284,57 @@ func (m *Mapper) crawlBundle(ctx context.Context, src string) {
 
 	sum := sha256.Sum256([]byte(body))
 	hash := hex.EncodeToString(sum[:])[:12]
-	m.finding("bundle", model.SevInfo, src,
+	m.finding("bundle", SevInfo, src,
 		fmt.Sprintf("JS %d KB sha256:%s", len(body)/1024, hash))
 
-	res := extract.AnalyzeJS(src, body)
+	res := AnalyzeJS(src, body)
 	for _, e := range res.Endpoints {
 		m.endpoint(e)
 	}
 	for _, t := range res.Tech {
-		sev := model.SevInfo
+		sev := SevInfo
 		kind := "tech"
 		switch strings.ToLower(t) {
 		case "gorm", "prisma", "sequelize", "knex":
 			// ORM terdeteksi = ada lapisan parameterisasi. Informasi berguna
 			// untuk memutuskan mana yang perlu dicek manual (raw query).
-			kind, sev = "orm-terdeteksi", model.SevLow
+			kind, sev = "orm-terdeteksi", SevLow
 		}
 		m.finding(kind, sev, src, "stack: "+t)
 	}
 	for _, s := range res.Secrets {
-		m.finding("secret-di-bundle", model.SevHigh, src,
+		m.finding("secret-di-bundle", SevHigh, src,
 			"pola kredensial "+s.Kind+" = "+s.Sample+" (rotasi bila nyata)")
 	}
 }
 
 func (m *Mapper) followForms(page, body string) {
-	for _, a := range extract.FormActions(body) {
-		abs, ok := extract.AbsResolve(page, a)
+	for _, a := range FormActions(body) {
+		abs, ok := AbsResolve(page, a)
 		if !ok {
 			continue
 		}
 		if u, err := url.Parse(abs); err != nil || !m.sc.Allows(u) {
 			continue
 		}
-		m.endpoint(model.Endpoint{
-			Method: "POST", Path: abs, Origin: model.OriginHTML, Source: page,
+		m.endpoint(Endpoint{
+			Method: "POST", Path: abs, Origin: OriginHTML, Source: page,
 		})
 	}
 }
 
 var securityHeaders = []struct {
 	Name string
-	Sev  model.Severity
+	Sev  Severity
 	Note string
 }{
-	{"Strict-Transport-Security", model.SevHigh, "hSTS tidak ada"},
-	{"Content-Security-Policy", model.SevHigh, "CSP tidak ada"},
-	{"X-Frame-Options", model.SevMedium, "bisa di-embed iframe (clickjacking)"},
-	{"Referrer-Policy", model.SevLow, "referrer policy tidak ada"},
+	{"Strict-Transport-Security", SevHigh, "hSTS tidak ada"},
+	{"Content-Security-Policy", SevHigh, "CSP tidak ada"},
+	{"X-Frame-Options", SevMedium, "bisa di-embed iframe (clickjacking)"},
+	{"Referrer-Policy", SevLow, "referrer policy tidak ada"},
 }
 
-func (m *Mapper) checkHeaders(pg *model.Page, hdr http.Header, raw string) {
+func (m *Mapper) checkHeaders(pg *Page, hdr http.Header, raw string) {
 	pg.Headers = map[string]string{}
 	for _, sh := range securityHeaders {
 		if v := hdr.Get(sh.Name); v == "" {
@@ -359,14 +355,14 @@ func (m *Mapper) checkHeaders(pg *model.Page, hdr http.Header, raw string) {
 
 	acao := hdr.Get("Access-Control-Allow-Origin")
 	if acao == "*" {
-		m.finding("cors", model.SevHigh, raw,
+		m.finding("cors", SevHigh, raw,
 			"Access-Control-Allow-Origin: * — origin mana pun bisa membaca respons")
 	} else if acao != "" {
 		pg.Headers["Access-Control-Allow-Origin"] = acao
 	}
 	if hdr.Get("Access-Control-Allow-Credentials") == "true" && acao != "" {
 		detail := "CORS allow-credentials dengan origin eksplisit"
-		sev := model.SevHigh
+		sev := SevHigh
 		if acao == "*" {
 			detail += " (dan origin-nya wildcard — paling berbahaya)"
 		}
@@ -380,7 +376,7 @@ func (m *Mapper) checkHeaders(pg *model.Page, hdr http.Header, raw string) {
 // paralel, halaman lain bisa sudah masuk lebih dulu sehingga cookie
 // menempel ke halaman yang bukan miliknya — dan kalau slice masih kosong,
 // terjadi panic index out of range.
-func (m *Mapper) checkCookies(pg *model.Page, hdr http.Header, raw string) {
+func (m *Mapper) checkCookies(pg *Page, hdr http.Header, raw string) {
 	for _, ck := range hdr.Values("Set-Cookie") {
 		name := ck
 		if i := strings.Index(ck, "="); i > 0 {
@@ -390,13 +386,13 @@ func (m *Mapper) checkCookies(pg *model.Page, hdr http.Header, raw string) {
 
 		lower := strings.ToLower(ck)
 		if !strings.Contains(lower, "httponly") {
-			m.finding("cookie", model.SevLow, raw, "cookie tanpa HttpOnly: "+name)
+			m.finding("cookie", SevLow, raw, "cookie tanpa HttpOnly: "+name)
 		}
 		if !strings.Contains(lower, "secure") && strings.HasPrefix(raw, "https://") {
-			m.finding("cookie", model.SevMedium, raw, "cookie tanpa flag Secure: "+name)
+			m.finding("cookie", SevMedium, raw, "cookie tanpa flag Secure: "+name)
 		}
 		if strings.Contains(lower, "samesite=none") {
-			m.finding("cookie", model.SevLow, raw,
+			m.finding("cookie", SevLow, raw,
 				"SameSite=None: cookie ikut terkirim lintas situs: "+name)
 		}
 	}
@@ -424,14 +420,14 @@ func (m *Mapper) get(ctx context.Context, u string) (int, string, http.Header, e
 
 // Snapshot mengembalikan hasil yang sudah terurut. Diurutkan supaya dua scan
 // atas target yang sama menghasilkan file yang bisa di-diff dengan bersih.
-func (m *Mapper) Snapshot() ([]model.Page, []model.Endpoint, []model.Finding, map[string]int) {
+func (m *Mapper) Snapshot() ([]Page, []Endpoint, []Finding, map[string]int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pages := make([]model.Page, len(m.pages))
+	pages := make([]Page, len(m.pages))
 	copy(pages, m.pages)
 	sort.Slice(pages, func(i, j int) bool { return pages[i].URL < pages[j].URL })
 
-	eps := make([]model.Endpoint, 0, len(m.endpoints))
+	eps := make([]Endpoint, 0, len(m.endpoints))
 	for _, e := range m.endpoints {
 		eps = append(eps, e)
 	}
@@ -442,11 +438,11 @@ func (m *Mapper) Snapshot() ([]model.Page, []model.Endpoint, []model.Finding, ma
 		return eps[i].Method < eps[j].Method
 	})
 
-	fs := make([]model.Finding, len(m.findings))
+	fs := make([]Finding, len(m.findings))
 	copy(fs, m.findings)
 	// Temuan berat lebih dulu: tinggi → sedang → rendah → info. Dengan begitu
 	// output ~/.txt langsung terbaca dari atas tanpa perlu scroll.
-	rank := map[model.Severity]int{model.SevHigh: 0, model.SevMedium: 1, model.SevLow: 2, model.SevInfo: 3}
+	rank := map[Severity]int{SevHigh: 0, SevMedium: 1, SevLow: 2, SevInfo: 3}
 	sort.SliceStable(fs, func(i, j int) bool { return rank[fs[i].Severity] < rank[fs[j].Severity] })
 
 	stats := make(map[string]int, len(m.stats))

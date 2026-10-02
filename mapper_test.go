@@ -1,4 +1,4 @@
-package mapper
+package lumen
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"lumen/internal/model"
 )
 
 // fakeSPA meniru aplikasi React: HTML-nya nyaris kosong, semua rute API ada
@@ -51,7 +49,7 @@ func TestSPAEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	u, _ := url.Parse(srv.URL)
-	m := New(Config{Target: u, Conc: 2, Delay: time.Millisecond})
+	m := NewMapper(MapperConfig{Target: u, Conc: 2, Delay: time.Millisecond})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -65,9 +63,9 @@ func TestSPAEndToEnd(t *testing.T) {
 	}
 
 	// 2. Rute API yang TIDAK ADA di HTML harus ditemukan lewat bundle.
-	paths := map[string]model.Endpoint{}
+	paths := map[string]Endpoint{}
 	for _, e := range eps {
-		if e.Origin == model.OriginJS {
+		if e.Origin == OriginJS {
 			paths[e.Path] = e
 		}
 	}

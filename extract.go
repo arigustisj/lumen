@@ -4,15 +4,13 @@
 // HTML — HTML cuma punya satu div kosong dan tag <script>. Crawler biasa akan
 // selalu melaporkan "halaman login saja" dan berhenti di sana. Rute sebenarnya
 // ada sebagai string literal di dalam bundle, dan di situlah yang perlu dibaca.
-package extract
+package lumen
 
 import (
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
-
-	"lumen/internal/model"
 )
 
 // --- HTML ------------------------------------------------------------------
@@ -135,7 +133,7 @@ var reEmbeddedKey = regexp.MustCompile(
 
 // JSResult adalah hasil analisis satu bundle.
 type JSResult struct {
-	Endpoints []model.Endpoint
+	Endpoints []Endpoint
 	Tech      []string
 	Secrets   []Secret
 	Bytes     int
@@ -209,8 +207,8 @@ func AnalyzeJS(src, body string) JSResult {
 		// menormalkan, tapi jalur lain (gabungan hasil probe di cmd/)
 		// bisa menambah flag yang sama lagi, dan flag kembar bikin
 		// output terlihat jauh lebih banyak tanpa menambah informasi.
-		res.Endpoints = append(res.Endpoints, model.Endpoint{
-			Method: e.method, Path: p, Origin: model.OriginJS,
+		res.Endpoints = append(res.Endpoints, Endpoint{
+			Method: e.method, Path: p, Origin: OriginJS,
 			Source: src, Flags: dedupFlags(e.flags),
 		})
 	}
