@@ -1,0 +1,72 @@
+// Package model mendefinisikan tipe data yang dipakai lintas package.
+//
+// Dipisah dari logika supaya output JSON punya satu sumber kebenaran: kalau
+// field berubah di sini, semua layer ikut berubah.
+package model
+
+import "time"
+
+// Severity adalah tingkat seriousness temuan.
+type Severity string
+
+const (
+	SevHigh   Severity = "high"
+	SevMedium Severity = "medium"
+	SevLow    Severity = "low"
+	SevInfo   Severity = "info"
+)
+
+// Finding adalah satu hal yang layak dilihat manusia. Tool ini tidak
+// menyimpulkan kerentanan — dia hanya menunjuk sesuatu yang menarik.
+// Penilaian tetap di tangan orang.
+type Finding struct {
+	Kind     string   `json:"kind"`
+	Severity Severity `json:"severity"`
+	Where    string   `json:"where"`
+	Detail   string   `json:"detail"`
+}
+
+// Origin menandai dari mana endpoint ditemukan. Penting untuk confidence:
+// path dari JS bundle jauh lebih reliable daripada link yang diklik navigasi.
+type Origin string
+
+const (
+	OriginHTML  Origin = "html"  // dari <a href> atau <form action>
+	OriginJS    Origin = "js"    // dari string di dalam bundle
+	OriginProbe Origin = "probe" // hasil probing langsung
+)
+
+type Endpoint struct {
+	Method string   `json:"method"`
+	Path   string   `json:"path"`
+	Origin Origin   `json:"origin"`
+	Source string   `json:"source,omitempty"`
+	Status int      `json:"status,omitempty"`
+	Title  string   `json:"title,omitempty"`
+	Flags  []string `json:"flags,omitempty"`
+}
+
+type Page struct {
+	URL        string            `json:"url"`
+	Status     int               `json:"status"`
+	Title      string            `json:"title"`
+	ContentLen int               `json:"content_len"`
+	IsHTML     bool              `json:"html"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Cookies    []string          `json:"cookies,omitempty"`
+	QueryKeys  []string          `json:"query_keys,omitempty"`
+	FormFields []string          `json:"form_fields,omitempty"`
+}
+
+// Report adalah output akhir: satu file JSON yang bisa dibaca agent, diff, atau
+// disimpan sebagai baseline untuk dibandingkan setelah patch.
+type Report struct {
+	Target      string         `json:"target"`
+	GeneratedAt time.Time      `json:"generated_at"`
+	DurationMS  int64          `json:"duration_ms"`
+	Pages       []Page         `json:"pages"`
+	Endpoints   []Endpoint     `json:"endpoints"`
+	Findings    []Finding      `json:"findings"`
+	ScopeDenied []string       `json:"scope_denied,omitempty"`
+	Stats       map[string]int `json:"stats"`
+}
