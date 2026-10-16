@@ -9,3 +9,7 @@ dist/
 # config yang berisi token
 lumen.yaml
 *.local.yaml
+
+# env files: keep only the example
+.env*
+!.env.example
