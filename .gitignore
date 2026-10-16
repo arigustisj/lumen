@@ -5,3 +5,7 @@ dist/
 *.sarif
 *.txt
 !README.md
+
+# env files: keep only the example
+.env*
+!.env.example
